@@ -64,7 +64,8 @@ extern "C" {
 #define P5EMU_A64_CTX_FN_STORE_OFFSET 184
 #define P5EMU_A64_CTX_FN_HLE_OFFSET 192
 #define P5EMU_A64_CTX_FN_ARITH_OFFSET 200 /* Phase 11 arithmetic helper */
-#define P5EMU_A64_CTX_SIZE 208
+#define P5EMU_A64_CTX_XMM_OFFSET 208      /* Phase 12: XMM0..XMM15 */
+#define P5EMU_A64_CTX_SIZE 464            /* 208 + 16 * 16 bytes of XMM */
 
 /* Termination reasons. Values MUST equal p5emu::cpu::TerminationReason. */
 #define P5EMU_A64_REASON_RUNNING 0
@@ -127,6 +128,7 @@ typedef struct P5EmuArm64Ctx {
   uint64_t fn_store;                 /* +184  : helper function pointer */
   uint64_t fn_hle;                   /* +192  : HLE dispatch helper pointer */
   uint64_t fn_arith;                 /* +200  : arithmetic helper pointer */
+  uint64_t xmm[16 * 2];              /* +208  : XMM0..XMM15, lo/hi pairs */
 } P5EmuArm64Ctx;
 
 /* Memory helper signatures, expressed as the generated code calls them.

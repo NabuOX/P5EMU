@@ -97,6 +97,9 @@ enum class OpClass : std::uint8_t {
   kMem8,
   kMem32,
   kMem64,
+  // Phase 12 SIMD operands.
+  kXmm,      // a 128-bit XMM register (XMM0..XMM15)
+  kMem128,   // a 128-bit memory operand
 };
 
 struct Operand {
@@ -170,6 +173,16 @@ enum class Mnemonic : std::uint16_t {
   kIMul,      // signed multiply (one-/two-operand/immediate)
   kDiv,       // unsigned divide (implicit RAX/RDX, #DE)
   kIDiv,      // signed divide (implicit RAX/RDX, #DE)
+
+  // Phase 12 SIMD (SSE/SSE2 foundation).
+  kMovd,      // MOVD xmm<->r/m32
+  kMovq,      // MOVQ xmm<->r/m64
+  kMovdqa,    // MOVDQA xmm<->xmm/m128 (aligned)
+  kMovdqu,    // MOVDQU xmm<->xmm/m128 (unaligned)
+  kPxor,      // PXOR xmm, xmm/m128
+  kPand,      // PAND xmm, xmm/m128
+  kPor,       // POR  xmm, xmm/m128
+  kPaddq,     // PADDQ xmm, xmm/m128 (two independent 64-bit lane adds)
 };
 
 const char* MnemonicName(Mnemonic m) noexcept;
@@ -237,6 +250,13 @@ enum class Form : std::uint8_t {
   kIDivRm,     // IDIV r/m (implicit RAX/RDX)
   kIMulRR,     // IMUL reg, r/m   (0F AF)
   kIMulRRI,    // IMUL reg, r/m, imm  (69 / 6B)
+
+  // Phase 12 SIMD forms.
+  kMovdToXmm,    // MOVD/MOVQ xmm, r/m (rm is a GPR or memory)
+  kMovdFromXmm,  // MOVD/MOVQ r/m, xmm
+  kMovdqaToXmm,  // MOVDQA/MOVDQU xmm, xmm/m128
+  kMovdqaFromXmm,// MOVDQA/MOVDQU xmm/m128, xmm
+  kPackedXmm,    // packed XMM op: xmm, xmm/m128
 };
 
 const char* FormName(Form f) noexcept;

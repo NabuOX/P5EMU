@@ -105,9 +105,12 @@ The arithmetic families are now implemented and documented in
 [`docs/architecture/cpu.md`](docs/architecture/cpu.md): a synchronous CPU fault
 model (`kCpuFault`/`kDivideError`), `ADC`/`SBB` (including accumulator-immediate
 forms), `MUL`/`IMUL`/`DIV`/`IDIV` at **8/16/32/64-bit** (8-bit via the new
-AH/CH/DH/BH register model), and 16-bit + memory-source `PUSH`/`POP`. Remaining
-CPU work is the out-of-scope list (REP/string, SSE/AVX, x87, atomics/`LOCK`, full
-exception delivery, syscalls, optimizer/register allocation).
+AH/CH/DH/BH register model), and 16-bit + memory-source `PUSH`/`POP`. Phase 12
+adds a host-independent **SIMD foundation** (XMM0–XMM15, MOVD/MOVQ/MOVDQA/MOVDQU,
+PXOR/PAND/POR/PADDQ). Remaining CPU work: broad SSE/SSE2 (floating-point,
+comparisons, conversions, shuffles) and SSE3+/AVX; plus the out-of-scope list
+(REP/string, x87, atomics/`LOCK`, full exception delivery, syscalls,
+optimizer/register allocation).
 
 ### Phase 9 tracks (executable / dynamic linking)
 

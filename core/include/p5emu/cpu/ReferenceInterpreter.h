@@ -44,6 +44,7 @@
 #include "p5emu/cpu/ExternalCall.h"
 #include "p5emu/cpu/GuestMemory.h"
 #include "p5emu/cpu/Ir.h"
+#include "p5emu/cpu/Vec128.h"
 
 namespace p5emu::cpu {
 
@@ -68,6 +69,11 @@ struct CpuState {
 
   std::uint64_t rip = 0;
   std::uint64_t eflags = 0;
+
+  // XMM0..XMM15 (Phase 12). 128-bit SIMD registers, independent of the GPRs.
+  // Every entry defaults to zero, so a test can never depend on an uninitialised
+  // host vector register. No YMM/ZMM state exists.
+  Vec128 xmm[kXmmCount];
 
   // Runaway protection and tracing.
   std::uint64_t executed_ops = 0;

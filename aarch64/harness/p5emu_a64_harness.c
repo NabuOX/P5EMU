@@ -34,7 +34,7 @@
 
 #include "p5emu/cpu/Arm64Abi.h"
 
-#define PROTOCOL_VERSION 2u
+#define PROTOCOL_VERSION 3u
 #define MAX_REGIONS 64u
 #define MAX_REGION_BYTES (64ull * 1024ull * 1024ull)
 
@@ -325,6 +325,7 @@ static int execute_record(const uint8_t* req, size_t req_size, size_t* off_io,
   for (int i = 0; i < P5EMU_A64_GPR_COUNT; ++i) { ctx.gpr[i] = rd_u64(req + off); off += 8; }
   ctx.rip = rd_u64(req + off); off += 8;
   ctx.eflags = rd_u64(req + off); off += 8;
+  for (int i = 0; i < 16 * 2; ++i) { ctx.xmm[i] = rd_u64(req + off); off += 8; }
 
   if (off + 4 > req_size) return 1;
   const uint32_t region_count = rd_u32(req + off); off += 4;
@@ -384,7 +385,8 @@ static int execute_record(const uint8_t* req, size_t req_size, size_t* off_io,
   munmap(code_map, map_size);
 
   /* Response size: header + region bytes. */
-  size_t rec = 4 + 4 + 8 + 8 + 8 + ((size_t)P5EMU_A64_GPR_COUNT * 8) + 8 + 8;
+  size_t rec = 4 + 4 + 8 + 8 + 8 + ((size_t)P5EMU_A64_GPR_COUNT * 8) + 8 + 8 +
+               (16u * 2u * 8u);  /* + XMM0..XMM15 lo/hi pairs (Phase 12) */
   for (uint32_t i = 0; i < region_count; ++i) rec += (size_t)table.regions[i].size;
   if (*resp_len + rec > *resp_cap) {
     size_t cap = (*resp_cap == 0) ? 4096 : *resp_cap;
@@ -403,6 +405,7 @@ static int execute_record(const uint8_t* req, size_t req_size, size_t* off_io,
   for (int i = 0; i < P5EMU_A64_GPR_COUNT; ++i) { wr_u64(w + ro, ctx.gpr[i]); ro += 8; }
   wr_u64(w + ro, ctx.rip); ro += 8;
   wr_u64(w + ro, ctx.eflags); ro += 8;
+  for (int i = 0; i < 16 * 2; ++i) { wr_u64(w + ro, ctx.xmm[i]); ro += 8; }
   for (uint32_t i = 0; i < region_count; ++i) {
     const size_t s = (size_t)table.regions[i].size;
     if (s) memcpy(w + ro, table.regions[i].data, s);

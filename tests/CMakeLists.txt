@@ -35,6 +35,7 @@ set(P5EMU_TEST_SOURCES
   runtime_fuzz_test.cpp
   runtime_profile_test.cpp
   sce_metadata_test.cpp
+  simd_test.cpp
 )
 
 file(GLOB P5EMU_TEST_FILES_ON_DISK CONFIGURE_DEPENDS
@@ -213,6 +214,14 @@ add_test(NAME p5emu.cpu.arithaccum   COMMAND p5emu_tests CpuArithAccum.)
 add_test(NAME p5emu.cpu.pushpop16    COMMAND p5emu_tests CpuPushPop16.)
 add_test(NAME p5emu.cpu.pushpopmem   COMMAND p5emu_tests CpuPushPopMem.)
 
+# --- Phase 12 suites ---
+add_test(NAME p5emu.simd.state       COMMAND p5emu_tests SimdXmmState.)
+add_test(NAME p5emu.simd.moves       COMMAND p5emu_tests SimdMoves.)
+add_test(NAME p5emu.simd.packed      COMMAND p5emu_tests SimdPacked.)
+add_test(NAME p5emu.simd.memory      COMMAND p5emu_tests SimdMemory.)
+add_test(NAME p5emu.simd.negative    COMMAND p5emu_tests SimdNegative.)
+add_test(NAME p5emu.simd.property    COMMAND p5emu_tests SimdProperty.)
+
 # Suite inventory, for the Phase 1 gate report.
 set(P5EMU_TEST_SUITES
   "p5emu.core;core_test.cpp: Core (logging, status, version)"
@@ -311,4 +320,10 @@ set(P5EMU_TEST_SUITES
   "p5emu.cpu.arithaccum;widths_test.cpp: ADC/SBB accumulator-immediate (Phase 12)"
   "p5emu.cpu.pushpop16;widths_test.cpp: 16-bit PUSH/POP (Phase 12)"
   "p5emu.cpu.pushpopmem;widths_test.cpp: memory-source PUSH/POP (Phase 12)"
+  "p5emu.simd.state;simd_test.cpp: XMM0-15 architectural state (Phase 12)"
+  "p5emu.simd.moves;simd_test.cpp: MOVD/MOVQ/MOVDQA/MOVDQU + upper-bit semantics (Phase 12)"
+  "p5emu.simd.packed;simd_test.cpp: PXOR/PAND/POR/PADDQ (Phase 12)"
+  "p5emu.simd.memory;simd_test.cpp: 128-bit guest memory + faults (Phase 12)"
+  "p5emu.simd.negative;simd_test.cpp: representative SIMD defects (Phase 12)"
+  "p5emu.simd.property;simd_test.cpp: packed-integer differential campaign (Phase 12)"
 )

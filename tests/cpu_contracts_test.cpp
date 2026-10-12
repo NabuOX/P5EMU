@@ -36,8 +36,9 @@ P5EMU_TEST(CpuContracts, StateLayoutIsFixedAndDocumented) {
   // 16 GPRs (rax..r15) = 16 x 8 = 128
   // rip               =        8 -> 136
   // eflags            =        8 -> 144
-  // executed_ops      =        8 -> 152
-  CHECK_EQ(sizeof(CpuState), static_cast<std::size_t>(152));
+  // xmm[16]           = 16 x 16 = 256 -> 400  (Phase 12: two 64-bit halves each)
+  // executed_ops      =        8 -> 408
+  CHECK_EQ(sizeof(CpuState), static_cast<std::size_t>(408));
 
   P5EMU_EXPECT_OFFSET(CpuState, rax, 0);
   P5EMU_EXPECT_OFFSET(CpuState, rbx, 8);
@@ -57,7 +58,8 @@ P5EMU_TEST(CpuContracts, StateLayoutIsFixedAndDocumented) {
   P5EMU_EXPECT_OFFSET(CpuState, r15, 120);
   P5EMU_EXPECT_OFFSET(CpuState, rip, 128);
   P5EMU_EXPECT_OFFSET(CpuState, eflags, 136);
-  P5EMU_EXPECT_OFFSET(CpuState, executed_ops, 144);
+  P5EMU_EXPECT_OFFSET(CpuState, xmm, 144);
+  P5EMU_EXPECT_OFFSET(CpuState, executed_ops, 400);
 
   // 8-byte aligned and a whole number of 8-byte words, so a backend can map it
   // in 64-bit units without unaligned-access handling.

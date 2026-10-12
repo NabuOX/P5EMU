@@ -555,6 +555,98 @@ class Gen {
         EmitShift(op);
         break;
 
+      // ---- SIMD (Phase 12) ----------------------------------------------
+      // A 128-bit value occupies a 16-byte slot: lo at SlotOff(v), hi at +8.
+      // Every operation is per 64-bit half, so only scalar instructions are used
+      // (a NEON representation is a later optimisation, not needed for
+      // correctness).
+      case ir::OpKind::kGetXmm: {
+        const std::uint64_t base =
+            P5EMU_A64_CTX_XMM_OFFSET + ir::XmmRegisterIndex(op.reg) * 16ull;
+        CtxLoad(kT0, base);
+        StrOff(kT0, kSp, SlotOff(op.dest));
+        CtxLoad(kT0, base + 8);
+        StrOff(kT0, kSp, SlotOff(op.dest) + 8);
+        break;
+      }
+      case ir::OpKind::kSetXmm: {
+        const std::uint64_t base =
+            P5EMU_A64_CTX_XMM_OFFSET + ir::XmmRegisterIndex(op.reg) * 16ull;
+        LdrOff(kT0, kSp, SlotOff(op.args[0]));
+        CtxStore(kT0, base);
+        LdrOff(kT0, kSp, SlotOff(op.args[0]) + 8);
+        CtxStore(kT0, base + 8);
+        break;
+      }
+      case ir::OpKind::kVecMake:
+        SlotLoad(kT0, op.args[0]);
+        StrOff(kT0, kSp, SlotOff(op.dest));
+        SlotLoad(kT0, op.args[1]);
+        StrOff(kT0, kSp, SlotOff(op.dest) + 8);
+        break;
+      case ir::OpKind::kVecExtractLow64:
+        LdrOff(kT0, kSp, SlotOff(op.args[0]));
+        SlotStore(kT0, op.dest);
+        break;
+      case ir::OpKind::kVecLoad: {
+        // Two checked 64-bit loads (addr, addr+8). A fault on either aborts
+        // before the destination slot is written.
+        for (int half = 0; half < 2; ++half) {
+          SlotLoad(1, op.args[0]);  // x1 = addr
+          if (half == 1) {
+            asm_.MovImm64(kT2, 8);
+            Raw(arm64::enc::AddSubReg(false, false, 1, 1, kT2, 0, 0));
+          }
+          CtxLoad(0, P5EMU_A64_CTX_MEM_OFFSET);
+          asm_.MovImm64(2, 8);
+          AddSpImm(3, kSp, status_slot_off_);
+          CtxLoad(4, P5EMU_A64_CTX_FN_LOAD_OFFSET);
+          Raw(arm64::enc::Blr(4));
+          LdrOff(kT0, kSp, status_slot_off_);
+          asm_.Cbnz(kT0, fault_exit_);
+          StrOff(0, kSp, SlotOff(op.dest) + static_cast<std::uint64_t>(half) * 8);
+        }
+        break;
+      }
+      case ir::OpKind::kVecStore: {
+        for (int half = 0; half < 2; ++half) {
+          SlotLoad(1, op.args[0]);  // x1 = addr
+          if (half == 1) {
+            asm_.MovImm64(kT2, 8);
+            Raw(arm64::enc::AddSubReg(false, false, 1, 1, kT2, 0, 0));
+          }
+          LdrOff(3, kSp, SlotOff(op.args[1]) + static_cast<std::uint64_t>(half) * 8);  // x3 = value
+          CtxLoad(0, P5EMU_A64_CTX_MEM_OFFSET);
+          asm_.MovImm64(2, 8);
+          AddSpImm(4, kSp, status_slot_off_);
+          CtxLoad(5, P5EMU_A64_CTX_FN_STORE_OFFSET);
+          Raw(arm64::enc::Blr(5));
+          LdrOff(kT0, kSp, status_slot_off_);
+          asm_.Cbnz(kT0, fault_exit_);
+        }
+        break;
+      }
+      case ir::OpKind::kVecXor:
+      case ir::OpKind::kVecAnd:
+      case ir::OpKind::kVecOr:
+      case ir::OpKind::kVecAdd64x2: {
+        for (int half = 0; half < 2; ++half) {
+          LdrOff(kT0, kSp, SlotOff(op.args[0]) + static_cast<std::uint64_t>(half) * 8);
+          LdrOff(kT1, kSp, SlotOff(op.args[1]) + static_cast<std::uint64_t>(half) * 8);
+          if (op.kind == ir::OpKind::kVecXor) {
+            Raw(arm64::enc::LogicalReg(2, kT2, kT0, kT1, 0, 0));  // eor
+          } else if (op.kind == ir::OpKind::kVecAnd) {
+            Raw(arm64::enc::LogicalReg(0, kT2, kT0, kT1, 0, 0));  // and
+          } else if (op.kind == ir::OpKind::kVecOr) {
+            Raw(arm64::enc::LogicalReg(1, kT2, kT0, kT1, 0, 0));  // orr
+          } else {
+            Raw(arm64::enc::AddSubReg(false, false, kT2, kT0, kT1, 0, 0));  // add
+          }
+          StrOff(kT2, kSp, SlotOff(op.dest) + static_cast<std::uint64_t>(half) * 8);
+        }
+        break;
+      }
+
       case ir::OpKind::kLoadFlags:
         CtxLoad(kT0, P5EMU_A64_CTX_EFLAGS_OFFSET);
         SlotStore(kT0, op.dest);

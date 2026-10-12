@@ -339,6 +339,9 @@ std::uint64_t* RegisterSlot(CpuState* s, ArchRegister reg) {
     case ArchRegister::kInvalid:
     case ArchRegister::kInvalidSentinel:
       return nullptr;
+    default:
+      // XMM registers are not GPR slots; kGetXmm/kSetXmm handle them directly.
+      return nullptr;
   }
   return nullptr;
 }
@@ -419,9 +422,26 @@ class ValueStore {
     return (id < slots_.size()) ? slots_[id] : 0u;
   }
 
+  // 128-bit SIMD values live in a parallel store (Phase 12).
+  void SetVec(ValueId id, const Vec128& v) {
+    if (id >= slots_.size()) {
+      slots_.resize(id + 1u, 0u);
+      types_.resize(id + 1u, ValueType::kInvalid);
+    }
+    if (id >= vecs_.size()) {
+      vecs_.resize(id + 1u);
+    }
+    types_[id] = ValueType::kV128;
+    vecs_[id] = v;
+  }
+  [[nodiscard]] Vec128 GetVec(ValueId id) const {
+    return (id < vecs_.size()) ? vecs_[id] : Vec128{};
+  }
+
  private:
   std::vector<std::uint64_t> slots_;
   std::vector<ValueType> types_;
+  std::vector<Vec128> vecs_;
 };
 
 }  // namespace
@@ -828,6 +848,95 @@ ExecutionResult ReferenceInterpreter::Execute(const Program& program,
           flags_value = values.Get(op.args[0]);
           break;
         }
+        // ---- SIMD (Phase 12) -------------------------------------------
+        // 128-bit values are two explicit 64-bit halves; every operation is
+        // defined per half, so no host vector type is involved.
+        case OpKind::kGetXmm: {
+          const std::uint32_t idx = XmmRegisterIndex(op.reg);
+          values.SetVec(op.dest,
+                        (idx < kXmmCount) ? state->xmm[idx] : Vec128{});
+          break;
+        }
+        case OpKind::kSetXmm: {
+          const std::uint32_t idx = XmmRegisterIndex(op.reg);
+          if (idx < kXmmCount) {
+            state->xmm[idx] = values.GetVec(op.args[0]);
+          }
+          break;
+        }
+        case OpKind::kVecMake:
+          values.SetVec(op.dest, Vec128{values.Get(op.args[0]),
+                                        values.Get(op.args[1])});
+          break;
+        case OpKind::kVecExtractLow64:
+          values.Ensure(op.dest, ValueType::kI64);
+          values.Set(op.dest, values.GetVec(op.args[0]).lo);
+          break;
+        case OpKind::kVecLoad: {
+          // Two checked 64-bit reads; a fault on either commits nothing.
+          const std::uint64_t addr = values.Get(op.args[0]);
+          Vec128 v;
+          const Status ls = memory.ReadData(addr, 8, &v.lo);
+          if (!ls.ok()) {
+            result.status = ls;
+            result.reason = TerminationReason::kFault;
+            halted = true;
+            break;
+          }
+          const Status hs = memory.ReadData(addr + 8, 8, &v.hi);
+          if (!hs.ok()) {
+            result.status = hs;
+            result.reason = TerminationReason::kFault;
+            halted = true;
+            break;
+          }
+          values.SetVec(op.dest, v);
+          break;
+        }
+        case OpKind::kVecStore: {
+          const std::uint64_t addr = values.Get(op.args[0]);
+          const Vec128 v = values.GetVec(op.args[1]);
+          const Status ls = memory.WriteData(addr, 8, v.lo);
+          if (!ls.ok()) {
+            result.status = ls;
+            result.reason = TerminationReason::kFault;
+            halted = true;
+            break;
+          }
+          const Status hs = memory.WriteData(addr + 8, 8, v.hi);
+          if (!hs.ok()) {
+            result.status = hs;
+            result.reason = TerminationReason::kFault;
+            halted = true;
+            break;
+          }
+          break;
+        }
+        case OpKind::kVecXor:
+        case OpKind::kVecAnd:
+        case OpKind::kVecOr:
+        case OpKind::kVecAdd64x2: {
+          const Vec128 a = values.GetVec(op.args[0]);
+          const Vec128 b = values.GetVec(op.args[1]);
+          Vec128 r;
+          if (op.kind == OpKind::kVecXor) {
+            r.lo = a.lo ^ b.lo;
+            r.hi = a.hi ^ b.hi;
+          } else if (op.kind == OpKind::kVecAnd) {
+            r.lo = a.lo & b.lo;
+            r.hi = a.hi & b.hi;
+          } else if (op.kind == OpKind::kVecOr) {
+            r.lo = a.lo | b.lo;
+            r.hi = a.hi | b.hi;
+          } else {
+            // PADDQ: two INDEPENDENT 64-bit lane additions (no cross-lane carry).
+            r.lo = a.lo + b.lo;
+            r.hi = a.hi + b.hi;
+          }
+          values.SetVec(op.dest, r);
+          break;
+        }
+
         case OpKind::kTestCc: {
           values.Ensure(op.dest, ValueType::kI8);
           values.Set(op.dest, EvaluateCondition(op.cond, flags_value) ? 1u : 0u);
@@ -998,6 +1107,23 @@ bool CompareCpuState(const CpuState& expected, const CpuState& actual,
   if (!Cmp("eflags", expected.eflags & eflags_mask,
            actual.eflags & eflags_mask, difference)) {
     return false;
+  }
+  // XMM0..XMM15, all 128 bits (lo and hi halves), Phase 12.
+  static const char* const kXmmLo[16] = {
+      "xmm0.lo",  "xmm1.lo",  "xmm2.lo",  "xmm3.lo",  "xmm4.lo",  "xmm5.lo",
+      "xmm6.lo",  "xmm7.lo",  "xmm8.lo",  "xmm9.lo",  "xmm10.lo", "xmm11.lo",
+      "xmm12.lo", "xmm13.lo", "xmm14.lo", "xmm15.lo"};
+  static const char* const kXmmHi[16] = {
+      "xmm0.hi",  "xmm1.hi",  "xmm2.hi",  "xmm3.hi",  "xmm4.hi",  "xmm5.hi",
+      "xmm6.hi",  "xmm7.hi",  "xmm8.hi",  "xmm9.hi",  "xmm10.hi", "xmm11.hi",
+      "xmm12.hi", "xmm13.hi", "xmm14.hi", "xmm15.hi"};
+  for (int i = 0; i < 16; ++i) {
+    if (!Cmp(kXmmLo[i], expected.xmm[i].lo, actual.xmm[i].lo, difference)) {
+      return false;
+    }
+    if (!Cmp(kXmmHi[i], expected.xmm[i].hi, actual.xmm[i].hi, difference)) {
+      return false;
+    }
   }
   return true;
 }

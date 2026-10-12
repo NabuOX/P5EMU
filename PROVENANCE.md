@@ -93,6 +93,7 @@ architecture behaviour. No upstream source was copied.
 | x86-64 stack family (`PUSH`/`POP`/`LEAVE`) + CPU architecture doc | 11 | Whole | Semantics from the Intel SDM Vol. 2 §2.2.1; lowered with existing IR ops; authored here. See `docs/architecture/cpu.md` |
 | x86-64 ADC/SBB/MUL/IMUL/DIV/IDIV + synchronous CPU fault | 11 | Whole | New IR ops + a shared arithmetic helper; divide-fault model. Authored here |
 | High-byte registers (AH/CH/DH/BH), 8-bit MUL/IMUL/DIV/IDIV, accumulator-immediate ADC/SBB, 16-bit/memory PUSH/POP | 12 | Whole | Intel SDM Vol. 2 §2.2.1; authored here |
+| SIMD / SSE foundation (`Vec128`, XMM0..XMM15, MOVD/MOVQ/MOVDQA/MOVDQU, PXOR/PAND/POR/PADDQ) | 12 | Whole | Semantics from the Intel SDM Vol. 2 SSE/SSE2 sections; host-independent two-half representation authored here. No NEON/compiler-vector dependency in the IR |
 
 ### PS5 executable-format facts (Phase 4)
 

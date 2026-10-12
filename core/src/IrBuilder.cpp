@@ -457,6 +457,74 @@ ValueId Builder::EmitIDiv(ValueId dividend_hi, ValueId dividend_lo,
                      rem_out, width_bytes);
 }
 
+// --- SIMD (Phase 12) -------------------------------------------------------
+ValueId Builder::EmitGetXmm(ArchRegister reg) {
+  const ValueId dest = DefineValue(ValueType::kV128);
+  if (dest == kInvalidValue) return dest;
+  Op op = MakeOp(OpKind::kGetXmm);
+  op.dest = dest;
+  op.reg = reg;
+  Append(std::move(op));
+  return dest;
+}
+void Builder::EmitSetXmm(ArchRegister reg, ValueId value) {
+  Op op = MakeOp(OpKind::kSetXmm);
+  op.reg = reg;
+  op.args = {value};
+  op.roles = {OperandRole::kSrc};
+  Append(std::move(op));
+}
+ValueId Builder::EmitVecMake(ValueId lo, ValueId hi) {
+  const ValueId dest = DefineValue(ValueType::kV128);
+  if (dest == kInvalidValue) return dest;
+  Op op = MakeOp(OpKind::kVecMake);
+  op.dest = dest;
+  op.args = {lo, hi};
+  op.roles = {OperandRole::kSrc, OperandRole::kSrc2};
+  Append(std::move(op));
+  return dest;
+}
+ValueId Builder::EmitVecExtractLow64(ValueId value) {
+  const ValueId dest = DefineValue(ValueType::kI64);
+  if (dest == kInvalidValue) return dest;
+  Op op = MakeOp(OpKind::kVecExtractLow64);
+  op.dest = dest;
+  op.args = {value};
+  op.roles = {OperandRole::kSrc};
+  Append(std::move(op));
+  return dest;
+}
+ValueId Builder::EmitVecLoad(ValueId addr) {
+  const ValueId dest = DefineValue(ValueType::kV128);
+  if (dest == kInvalidValue) return dest;
+  Op op = MakeOp(OpKind::kVecLoad);
+  op.dest = dest;
+  op.args = {addr};
+  op.roles = {OperandRole::kAddr};
+  Append(std::move(op));
+  return dest;
+}
+void Builder::EmitVecStore(ValueId addr, ValueId value) {
+  Op op = MakeOp(OpKind::kVecStore);
+  op.args = {addr, value};
+  op.roles = {OperandRole::kAddr, OperandRole::kSrc};
+  Append(std::move(op));
+}
+ValueId Builder::EmitVecBinary(OpKind kind, ValueId a, ValueId b) {
+  if (kind != OpKind::kVecXor && kind != OpKind::kVecAnd &&
+      kind != OpKind::kVecOr && kind != OpKind::kVecAdd64x2) {
+    return kInvalidValue;
+  }
+  const ValueId dest = DefineValue(ValueType::kV128);
+  if (dest == kInvalidValue) return dest;
+  Op op = MakeOp(kind);
+  op.dest = dest;
+  op.args = {a, b};
+  op.roles = {OperandRole::kSrc, OperandRole::kSrc2};
+  Append(std::move(op));
+  return dest;
+}
+
 // ---------------------------------------------------------------------------
 // Flags
 // ---------------------------------------------------------------------------

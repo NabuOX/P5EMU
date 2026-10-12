@@ -115,6 +115,16 @@ class Builder {
   ValueId EmitIDiv(ValueId dividend_hi, ValueId dividend_lo, ValueId divisor,
                    ValueId* rem_out, std::uint8_t width_bytes = 8);
 
+  // -- SIMD (Phase 12) -----------------------------------------------------
+  ValueId EmitGetXmm(ArchRegister reg);
+  void EmitSetXmm(ArchRegister reg, ValueId value);
+  ValueId EmitVecMake(ValueId lo, ValueId hi);
+  ValueId EmitVecExtractLow64(ValueId value);
+  ValueId EmitVecLoad(ValueId addr);
+  void EmitVecStore(ValueId addr, ValueId value);
+  // kind must be one of kVecXor/kVecAnd/kVecOr/kVecAdd64x2.
+  ValueId EmitVecBinary(OpKind kind, ValueId a, ValueId b);
+
   ValueId EmitMaterializeConstant(std::uint64_t value, ValueType type);
   ValueId EmitLoadFlags();
   void EmitStoreFlags(ValueId flags);

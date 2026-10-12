@@ -142,8 +142,17 @@ enum class ArchRegister : std::uint8_t {
   // Phase 12 so the 8-bit MUL/IMUL/DIV/IDIV implicit AH result is representable
   // without a special case in the backends.
   kAh, kCh, kDh, kBh,
+  // XMM0..XMM15 (Phase 12). 128-bit SIMD registers, addressed by kGetXmm/kSetXmm
+  // only; they are NOT general-purpose registers and have no scalar view.
+  kXmm0, kXmm1, kXmm2, kXmm3, kXmm4, kXmm5, kXmm6, kXmm7,
+  kXmm8, kXmm9, kXmm10, kXmm11, kXmm12, kXmm13, kXmm14, kXmm15,
   kInvalidSentinel,  // Validation must reject this. Kept for negative tests.
 };
+
+// True for an XMM register (kXmm0..kXmm15).
+bool IsXmmRegister(ArchRegister reg) noexcept;
+// XMM index 0..15, or 0xFFFFFFFF when `reg` is not an XMM register.
+std::uint32_t XmmRegisterIndex(ArchRegister reg) noexcept;
 
 // Returns the architectural encoding 0..15 for a general-purpose register, or
 // 0xFF if the register is not one of them.
@@ -248,6 +257,21 @@ enum class OpKind : std::uint8_t {
   //   divide error when the divisor is zero or the quotient does not fit
   //   `width`, and commit NO result on a fault.
   kAdcFlags, kSbbFlags, kMulFlags, kIMulFlags, kDivFlags, kIDivFlags,
+
+  // -- SIMD (Phase 12) ------------------------------------------------------
+  // Host-independent 128-bit operations. kGetXmm/kSetXmm address XMM0..XMM15
+  // (op.reg); the rest operate on kVec128 values. Every operation is defined
+  // per 64-bit half, so no backend needs host vector instructions to be correct.
+  kGetXmm,          // reg -> vec128
+  kSetXmm,          // reg, vec128
+  kVecMake,         // lo(i64), hi(i64) -> vec128
+  kVecExtractLow64, // vec128 -> i64 (low 64 bits)
+  kVecLoad,         // addr -> vec128 (two checked 64-bit reads)
+  kVecStore,        // addr, vec128 (two checked 64-bit writes)
+  kVecXor,          // a, b -> vec128 (bitwise)
+  kVecAnd,          // a, b -> vec128 (bitwise)
+  kVecOr,           // a, b -> vec128 (bitwise)
+  kVecAdd64x2,      // a, b -> vec128 (two independent 64-bit lane adds, PADDQ)
 
   // -- Conditions --
   kTestCc,   // flags -> i8 (0 or 1)

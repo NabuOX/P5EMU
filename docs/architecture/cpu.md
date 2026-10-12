@@ -180,10 +180,68 @@ representable without a special case.
   destination computes its effective address from the **old** RSP; POP RSP itself
   takes the loaded value.
 
+## SIMD / SSE foundation (Phase 12)
+
+P5EMU's first SIMD architecture. XMM0..XMM15 are real 128-bit architectural
+state, represented host-independently and executed by both the interpreter and
+the AArch64 backend.
+
+### Representation
+
+A 128-bit value is two explicit 64-bit halves (`cpu::Vec128`): `lo` = bytes 0..7
+(lowest address), `hi` = bytes 8..15. There is NO dependency on a compiler vector
+extension or a NEON type in the P5 IR or the architectural state. Every Phase-12
+operation is defined per 64-bit half, so the AArch64 backend needs only scalar
+64-bit instructions (a NEON representation is a later optimisation).
+
+### IR
+
+New registers `kXmm0..kXmm15`, value type `kV128`, and ops `kGetXmm`, `kSetXmm`,
+`kVecMake`, `kVecExtractLow64`, `kVecLoad`, `kVecStore`, `kVecXor`, `kVecAnd`,
+`kVecOr`, `kVecAdd64x2`. The validator allows XMM registers only on
+`kGetXmm`/`kSetXmm` and requires `kV128` operands on the vector ops.
+
+### Supported instructions (SSE/SSE2 subset)
+
+| Instruction | Encoding | Notes |
+|---|---|---|
+| MOVD xmm,r/m32 / r/m32,xmm | `66 0F 6E` / `66 0F 7E` | upper 96 bits cleared |
+| MOVQ xmm,r/m64 / r/m64,xmm | `66 REX.W 0F 6E` / `66 REX.W 0F 7E` | upper 64 bits cleared |
+| MOVDQA xmm,xmm/m128 | `66 0F 6F` / `66 0F 7F` | alignment NOT enforced (below) |
+| MOVDQU xmm,xmm/m128 | `F3 0F 6F` / `F3 0F 7F` | |
+| PXOR / PAND / POR | `66 0F EF` / `DB` / `EB` | do not touch EFLAGS |
+| PADDQ | `66 0F D4` | two INDEPENDENT 64-bit lane adds |
+
+Packed integer ops do not modify EFLAGS.
+
+### Memory and alignment
+
+A 128-bit load/store is two checked 64-bit `GuestMemoryPort` accesses (addr and
+addr+8): there is NO single atomic 16-byte access, and no host alignment
+assumption. A fault on either half aborts before the destination is written, so a
+failed load leaves the XMM unchanged. MOVDQA and MOVDQU currently behave the same:
+P5EMU's `GuestMemoryPort` does not model x86 alignment-fault fidelity, and that
+limitation is stated here rather than invented. An alignment fault is a different
+thing from the ordinary bounds/protection faults the port reports.
+
+### AArch64 context
+
+The context ABI grew `P5EMU_A64_CTX_XMM_OFFSET` (208) and `P5EMU_A64_CTX_SIZE`
+(464) for XMM0..XMM15 as lo/hi pairs; the harness transport protocol is v3. x18
+stays unused and x19 remains the context pointer.
+
+### Not in this phase
+
+No YMM/ZMM, AVX/AVX2/AVX-512, VEX/EVEX, floating-point SSE, comparisons,
+conversions, shuffles, or MXCSR semantics. PXOR/PAND/POR/PADDQ are the only
+packed integer ops.
+
 ## Remaining gaps
 
-- Out of scope by project policy: REP/string, SSE/AVX, x87, atomics/LOCK, full
-  exception delivery, syscalls, an optimizer, and register allocation.
+- Broad SSE/SSE2 (floating-point, comparisons, conversions, shuffles) and all of
+  SSE3+/AVX/AVX2/AVX-512.
+- Out of scope by project policy: REP/string, x87, atomics/LOCK, full exception
+  delivery, syscalls, an optimizer, and register allocation.
 
 P5EMU does **not** claim complete x86-64 compatibility. Coverage is deliberately
 small, honest, and differentially verified.

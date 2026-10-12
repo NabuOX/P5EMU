@@ -131,7 +131,16 @@ ValueType InferType(const Program& program, ValueId v,
     case OpKind::kIMulFlags:
     case OpKind::kDivFlags:
     case OpKind::kIDivFlags:
+    case OpKind::kVecExtractLow64:
       return ValueType::kI64;
+    case OpKind::kGetXmm:
+    case OpKind::kVecMake:
+    case OpKind::kVecLoad:
+    case OpKind::kVecXor:
+    case OpKind::kVecAnd:
+    case OpKind::kVecOr:
+    case OpKind::kVecAdd64x2:
+      return ValueType::kV128;
     case OpKind::kTestCc:
       return ValueType::kI8;
     default:
@@ -231,6 +240,26 @@ bool ExpectedOperands(OpKind kind, std::vector<OperandRole>* roles_out) {
     case OpKind::kIDivFlags:
       // dividend_hi, dividend_lo, divisor
       *roles_out = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kSrc3};
+      return true;
+    // Phase 12 SIMD.
+    case OpKind::kGetXmm:
+      return true;  // reg field only
+    case OpKind::kSetXmm:
+    case OpKind::kVecExtractLow64:
+      *roles_out = {OperandRole::kSrc};
+      return true;
+    case OpKind::kVecMake:
+    case OpKind::kVecXor:
+    case OpKind::kVecAnd:
+    case OpKind::kVecOr:
+    case OpKind::kVecAdd64x2:
+      *roles_out = {OperandRole::kSrc, OperandRole::kSrc2};
+      return true;
+    case OpKind::kVecLoad:
+      *roles_out = {OperandRole::kAddr};
+      return true;
+    case OpKind::kVecStore:
+      *roles_out = {OperandRole::kAddr, OperandRole::kSrc};
       return true;
     case OpKind::kInvalid:
       return false;
@@ -448,6 +477,12 @@ Status ValidateIrDetailed(const Program& program, ValidationReport* report) {
                     std::string("high-byte register ") + ArchRegisterName(op.reg) +
                         " requires an 8-bit width");
       }
+      if ((op.kind == OpKind::kGetXmm || op.kind == OpKind::kSetXmm) &&
+          !IsXmmRegister(op.reg)) {
+        return fail("invalid-register", block.id, op_index, op.dest,
+                    std::string("expected an XMM register, got ") +
+                        ArchRegisterName(op.reg));
+      }
       if (op.kind == OpKind::kLoad || op.kind == OpKind::kStore) {
         if (!memory::IsValidAccessWidth(op.width)) {
           return fail("malformed-memory-op", block.id, op_index, op.dest,
@@ -561,20 +596,32 @@ Status ValidateIrDetailed(const Program& program, ValidationReport* report) {
           }
         } else if (role == OperandRole::kAddr || role == OperandRole::kSrc ||
                    role == OperandRole::kSrc2 || role == OperandRole::kSrc3) {
-          // Any SCALAR INTEGER type is acceptable where an integer is wanted.
-          //
-          // P5EMU stores every value in a 64-bit slot, so an i8 or i32 result
-          // (kTestCc produces i8, for instance) occupies a full register exactly
-          // as x86 requires: MOVSX into r32 leaves the upper 32 bits clear, and
-          // a setcc-style byte result is only ever consumed through its low
-          // bits. Rejecting a narrow type here made kTestCc's result unusable,
-          // which in turn made every condition code unevaluatable.
-          const bool scalar_integer =
-              (vt == ValueType::kI8) || (vt == ValueType::kI16) ||
-              (vt == ValueType::kI32) || (vt == ValueType::kI64);
-          if (!scalar_integer) {
-            return fail("value-type-mismatch", block.id, op_index, v,
-                        std::string("expected an integer, got ") + TypeName(vt));
+          // Phase 12: some kSrc/kSrc2 operands are 128-bit SIMD values, not
+          // integers. The op determines which.
+          const bool role_is_vec =
+              (op.kind == OpKind::kSetXmm && role == OperandRole::kSrc) ||
+              (op.kind == OpKind::kVecStore && role == OperandRole::kSrc) ||
+              (op.kind == OpKind::kVecExtractLow64 &&
+               role == OperandRole::kSrc) ||
+              ((op.kind == OpKind::kVecXor || op.kind == OpKind::kVecAnd ||
+                op.kind == OpKind::kVecOr ||
+                op.kind == OpKind::kVecAdd64x2) &&
+               (role == OperandRole::kSrc || role == OperandRole::kSrc2));
+          if (role_is_vec) {
+            if (vt != ValueType::kV128) {
+              return fail("value-type-mismatch", block.id, op_index, v,
+                          std::string("expected vec128, got ") + TypeName(vt));
+            }
+          } else {
+            // Any SCALAR INTEGER type is acceptable where an integer is wanted.
+            const bool scalar_integer =
+                (vt == ValueType::kI8) || (vt == ValueType::kI16) ||
+                (vt == ValueType::kI32) || (vt == ValueType::kI64);
+            if (!scalar_integer) {
+              return fail("value-type-mismatch", block.id, op_index, v,
+                          std::string("expected an integer, got ") +
+                              TypeName(vt));
+            }
           }
         }
       }

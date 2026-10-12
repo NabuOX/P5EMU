@@ -21,7 +21,7 @@ namespace p5emu::cpu {
 namespace {
 
 constexpr char kMagic[4] = {'P', '5', 'A', '2'};
-constexpr std::uint32_t kProtocolVersion = 2;
+constexpr std::uint32_t kProtocolVersion = 3;
 
 void AppendU32(std::vector<std::uint8_t>* b, std::uint32_t v) {
   for (int i = 0; i < 4; ++i) {
@@ -170,6 +170,9 @@ void AppendCase(std::vector<std::uint8_t>* req, const Arm64BatchCase& c) {
   }
   AppendU64(req, c.ctx.rip);
   AppendU64(req, c.ctx.eflags);
+  for (int i = 0; i < 16 * 2; ++i) {  // XMM0..XMM15 as lo/hi pairs
+    AppendU64(req, c.ctx.xmm[i]);
+  }
   AppendU32(req, static_cast<std::uint32_t>(regions.size()));
   for (const Arm64MemoryRegion& r : regions) {
     AppendU64(req, r.base);
@@ -284,6 +287,12 @@ Status QemuArm64Runner::RunBatch(const std::vector<Arm64BatchCase>& cases,
         !ReadU64(resp, &off, &r.ctx.eflags)) {
       if (detail != nullptr) *detail = "harness response is truncated";
       return StatusCode::kBackendError;
+    }
+    for (int i = 0; i < 16 * 2; ++i) {
+      if (!ReadU64(resp, &off, &r.ctx.xmm[i])) {
+        if (detail != nullptr) *detail = "harness response is truncated (xmm)";
+        return StatusCode::kBackendError;
+      }
     }
     if (resp.size() - off < c.mem_in.size()) {
       if (detail != nullptr) *detail = "harness response is truncated (memory)";

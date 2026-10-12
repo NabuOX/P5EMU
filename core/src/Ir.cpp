@@ -102,7 +102,27 @@ std::uint32_t ArchRegisterNumber(ArchRegister reg) noexcept {
   return 0xffu;
 }
 
+bool IsXmmRegister(ArchRegister reg) noexcept {
+  return reg >= ArchRegister::kXmm0 && reg <= ArchRegister::kXmm15;
+}
+
+std::uint32_t XmmRegisterIndex(ArchRegister reg) noexcept {
+  if (!IsXmmRegister(reg)) {
+    return 0xFFFFFFFFu;
+  }
+  return static_cast<std::uint32_t>(reg) -
+         static_cast<std::uint32_t>(ArchRegister::kXmm0);
+}
+
 const char* ArchRegisterName(ArchRegister reg) noexcept {
+  {
+    static const char* const kXmmNames[16] = {
+        "xmm0",  "xmm1",  "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",
+        "xmm8",  "xmm9",  "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"};
+    if (IsXmmRegister(reg)) {
+      return kXmmNames[XmmRegisterIndex(reg)];
+    }
+  }
   switch (reg) {
     case ArchRegister::kInvalid:        return "<invalid>";
     case ArchRegister::kRax:            return "rax";
@@ -128,6 +148,9 @@ const char* ArchRegisterName(ArchRegister reg) noexcept {
     case ArchRegister::kDh:             return "dh";
     case ArchRegister::kBh:             return "bh";
     case ArchRegister::kInvalidSentinel:return "<sentinel>";
+    // XMM registers are handled by the early return above; listed as default so
+    // the switch stays exhaustive without repeating 16 cases.
+    default: break;
   }
   return "<unknown>";
 }
@@ -179,6 +202,16 @@ const char* OpKindName(OpKind kind) noexcept {
     case OpKind::kIMulFlags:   return "imul_flags";
     case OpKind::kDivFlags:    return "div_flags";
     case OpKind::kIDivFlags:   return "idiv_flags";
+    case OpKind::kGetXmm:      return "get_xmm";
+    case OpKind::kSetXmm:      return "set_xmm";
+    case OpKind::kVecMake:     return "vec_make";
+    case OpKind::kVecExtractLow64: return "vec_extract_low64";
+    case OpKind::kVecLoad:     return "vec_load";
+    case OpKind::kVecStore:    return "vec_store";
+    case OpKind::kVecXor:      return "vec_xor";
+    case OpKind::kVecAnd:      return "vec_and";
+    case OpKind::kVecOr:       return "vec_or";
+    case OpKind::kVecAdd64x2:  return "vec_add64x2";
     case OpKind::kAddrCalc:    return "addr_calc";
     case OpKind::kTestCc:      return "test_cc";
     case OpKind::kNop:         return "nop";

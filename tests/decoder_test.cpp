@@ -722,9 +722,9 @@ P5EMU_TEST(DecoderRoundTrip, NullOutputBufferIsRejected) {
 
 P5EMU_TEST(Decoder, SupportedCountMatchesTheDocumentedSubset) {
   // The count is a checked constant, so adding an instruction forces a
-  // deliberate decision to update it and the coverage report. Phase 11 added
-  // push/pop/leave and adc/sbb/mul/imul/div/idiv (20 -> 29).
-  CHECK_EQ(X64Decoder::SupportedCount(), std::size_t{29});
+  // deliberate decision to update it and the coverage report. Phase 12 added
+  // movd/movq/movdqa/movdqu/pxor/pand/por/paddq (29 -> 37).
+  CHECK_EQ(X64Decoder::SupportedCount(), std::size_t{37});
   CHECK(X64Decoder::IsSupported(Mnemonic::kMov));
   CHECK(X64Decoder::IsSupported(Mnemonic::kLea));
   CHECK(X64Decoder::IsSupported(Mnemonic::kInt3));
@@ -737,6 +737,14 @@ P5EMU_TEST(Decoder, SupportedCountMatchesTheDocumentedSubset) {
   CHECK(X64Decoder::IsSupported(Mnemonic::kIMul));
   CHECK(X64Decoder::IsSupported(Mnemonic::kDiv));
   CHECK(X64Decoder::IsSupported(Mnemonic::kIDiv));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kMovd));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kMovq));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kMovdqa));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kMovdqu));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kPxor));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kPand));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kPor));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kPaddq));
   CHECK(!X64Decoder::IsSupported(Mnemonic::kUnimplemented));
 }
 

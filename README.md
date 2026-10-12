@@ -4,16 +4,19 @@ An independent, experimental PlayStation 5 emulator architecture, designed from
 day one for portability, with ARM64 and ultimately iPhone/iPad as important
 long-term targets.
 
-**Status: Phase 0–9.** The architecture foundation (Phases 0–7) is complete,
-Phase 8 adds an **evidence-bounded PS5 runtime model**, and Phase 9 adds a
-**typed, evidence-safe representation of PS5/SCE executable and dynamic-linking
-metadata**. The pipeline runs end to end on synthetic inputs: x86-64 decode →
-P5EMU IR → { reference interpreter | AArch64 backend }, with a transactional
-ELF/relocation loader, an HLE guest-to-host bridge, and a multi-module,
-multi-region process runtime. PS5 runtime and dynamic-link facts are represented
-explicitly as known or UNKNOWN; undocumented behaviour is not fabricated.
-**No commercial game runs today; there is no PS5 compatibility claim; and no
-Sony material is present.** See [Licence](#licence) for the current terms.
+**Status: Phase 0–12.** The architecture foundation (Phases 0–7) is complete,
+Phase 8 adds an **evidence-bounded PS5 runtime model**, Phase 9 adds a **typed,
+evidence-safe representation of PS5/SCE executable and dynamic-linking metadata**,
+Phase 11 expands the x86-64 CPU (ADC/SBB/MUL/IMUL/DIV/IDIV, a synchronous CPU
+fault model, PUSH/POP/LEAVE, AH/CH/DH/BH), and Phase 12 adds a **host-independent
+SIMD foundation** (XMM0–XMM15 `Vec128` state, MOVD/MOVQ/MOVDQA/MOVDQU,
+PXOR/PAND/POR/PADDQ). The pipeline runs end to end on synthetic inputs: x86-64
+decode → P5EMU IR → { reference interpreter | AArch64 backend }, with a
+transactional ELF/relocation loader, an HLE guest-to-host bridge, and a
+multi-module, multi-region process runtime. PS5 runtime and dynamic-link facts are
+represented explicitly as known or UNKNOWN; undocumented behaviour is not
+fabricated. **No commercial game runs today; there is no PS5 compatibility claim;
+and no Sony material is present.** See [Licence](#licence) for the current terms.
 
 ```
 PS5 x86-64 guest
@@ -64,7 +67,7 @@ Phase 1 CPU pipeline, tested end to end:
 - **`Differential` harness** — compares backends field by field, with a
   deliberately buggy backend proving the harness can actually detect a
   divergence.
-- A self-contained test harness (69 CTest suites), a provenance gate, and a
+- A self-contained test harness (103 CTest suites), a provenance gate, and a
   research corpus.
 
 Phase 2 adds the first real execution backend:

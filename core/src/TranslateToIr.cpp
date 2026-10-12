@@ -39,6 +39,15 @@ ArchRegister ToArchRegister(std::uint8_t reg) {
                                    reg);
 }
 
+// Maps an XMM register number (0..15) to the IR's XMM register.
+ArchRegister ToXmmRegister(std::uint8_t reg) {
+  if (reg > 15) {
+    return ArchRegister::kInvalid;
+  }
+  return static_cast<ArchRegister>(static_cast<std::uint8_t>(ArchRegister::kXmm0) +
+                                   reg);
+}
+
 // Operand width in bytes, normalised to 1/2/4/8. 0 (unspecified) is 8.
 std::uint8_t NormWidth(std::uint32_t width_bytes) {
   return (width_bytes == 1 || width_bytes == 2 || width_bytes == 4)
@@ -148,6 +157,25 @@ Status ReadOperand(const Operand& op, std::uint32_t width_bytes,
       *type_out = ir::ValueType::kI64;
       return StatusCode::kOk;
     }
+    case OpClass::kXmm: {
+      const ArchRegister r = ToXmmRegister(op.reg);
+      if (r == ArchRegister::kInvalid) {
+        return StatusCode::kDecodeError;
+      }
+      *value_out = b->EmitGetXmm(r);
+      *type_out = ir::ValueType::kV128;
+      return StatusCode::kOk;
+    }
+    case OpClass::kMem128: {
+      ir::ValueId addr = ir::kInvalidValue;
+      const Status st = ComputeEffectiveAddress(op, &addr, b);
+      if (!st.ok()) {
+        return st;
+      }
+      *value_out = b->EmitVecLoad(addr);
+      *type_out = ir::ValueType::kV128;
+      return StatusCode::kOk;
+    }
     case OpClass::kNone:
       *value_out = ir::kInvalidValue;
       *type_out = ir::ValueType::kInvalid;
@@ -185,6 +213,23 @@ Status WriteOperand(const Operand& op, std::uint32_t width_bytes,
         return st;
       }
       b->EmitStore(addr, value, width_bytes);
+      return StatusCode::kOk;
+    }
+    case OpClass::kXmm: {
+      const ArchRegister r = ToXmmRegister(op.reg);
+      if (r == ArchRegister::kInvalid) {
+        return StatusCode::kDecodeError;
+      }
+      b->EmitSetXmm(r, value);
+      return StatusCode::kOk;
+    }
+    case OpClass::kMem128: {
+      ir::ValueId addr = ir::kInvalidValue;
+      const Status st = ComputeEffectiveAddress(op, &addr, b);
+      if (!st.ok()) {
+        return st;
+      }
+      b->EmitVecStore(addr, value);
       return StatusCode::kOk;
     }
     case OpClass::kNone:
@@ -621,6 +666,65 @@ Status TranslateToIr(const x64::Instruction& insn, Builder* builder) {
       b.EmitSetReg(ArchRegister::kRsp, new_sp);
       b.EmitSetReg(ArchRegister::kRbp, value);
       return StatusCode::kOk;
+    }
+
+    // ---- SIMD (Phase 12) --------------------------------------------------
+    case Mnemonic::kMovd:
+    case Mnemonic::kMovq: {
+      if (insn.form == Form::kMovdToXmm) {
+        // xmm <- r/m : low half = the scalar (zero-extended), high half = 0.
+        // Legacy MOVD/MOVQ clear the upper bits; they are NOT preserved.
+        ir::ValueType t{};
+        ValueId v = ir::kInvalidValue;
+        const Status rd = ReadOperand(insn.src, insn.op_size, &t, &v, &b);
+        if (!rd.ok()) return rd;
+        const ValueId zero = b.EmitMaterializeConstant(0, ir::ValueType::kI64);
+        const ValueId vec = b.EmitVecMake(v, zero);
+        if (vec == ir::kInvalidValue) return StatusCode::kInternal;
+        return WriteOperand(insn.dst, 16, vec, &b);
+      }
+      // r/m <- xmm : the low 32/64 bits of the XMM.
+      ir::ValueType t{};
+      ValueId vec = ir::kInvalidValue;
+      const Status rd = ReadOperand(insn.src, 16, &t, &vec, &b);
+      if (!rd.ok()) return rd;
+      const ValueId lo = b.EmitVecExtractLow64(vec);
+      if (lo == ir::kInvalidValue) return StatusCode::kInternal;
+      return WriteOperand(insn.dst, insn.op_size, lo, &b);
+    }
+    case Mnemonic::kMovdqa:
+    case Mnemonic::kMovdqu: {
+      // Both directions move 128 bits: src is always the source operand.
+      ir::ValueType t{};
+      ValueId vec = ir::kInvalidValue;
+      const Status rd = ReadOperand(insn.src, 16, &t, &vec, &b);
+      if (!rd.ok()) return rd;
+      return WriteOperand(insn.dst, 16, vec, &b);
+    }
+    case Mnemonic::kPxor:
+    case Mnemonic::kPand:
+    case Mnemonic::kPor:
+    case Mnemonic::kPaddq: {
+      ir::ValueType tl{};
+      ir::ValueType tr{};
+      ValueId a = ir::kInvalidValue;
+      ValueId c = ir::kInvalidValue;
+      const Status ra = ReadOperand(insn.dst, 16, &tl, &a, &b);
+      if (!ra.ok()) return ra;
+      const Status rc = ReadOperand(insn.src, 16, &tr, &c, &b);
+      if (!rc.ok()) return rc;
+      OpKind kind = OpKind::kVecXor;
+      switch (insn.mnemonic) {
+        case Mnemonic::kPxor:  kind = OpKind::kVecXor;     break;
+        case Mnemonic::kPand:  kind = OpKind::kVecAnd;     break;
+        case Mnemonic::kPor:   kind = OpKind::kVecOr;      break;
+        case Mnemonic::kPaddq: kind = OpKind::kVecAdd64x2; break;
+        default: break;
+      }
+      const ValueId r = b.EmitVecBinary(kind, a, c);
+      if (r == ir::kInvalidValue) return StatusCode::kInternal;
+      // Packed integer ops do NOT touch EFLAGS.
+      return WriteOperand(insn.dst, 16, r, &b);
     }
 
     case Mnemonic::kNop:

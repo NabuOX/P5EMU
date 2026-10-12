@@ -160,6 +160,10 @@ ExecutionResult Arm64Backend::Execute(const ir::Program& program,
   ctx.rip = state->rip;
   ctx.eflags = state->eflags;
   ctx.steps = step_limit_;
+  for (std::uint32_t i = 0; i < kXmmCount; ++i) {
+    ctx.xmm[i * 2u] = state->xmm[i].lo;
+    ctx.xmm[i * 2u + 1u] = state->xmm[i].hi;
+  }
 
   std::vector<std::vector<std::uint8_t>> regions_out;
   std::string detail;
@@ -192,6 +196,10 @@ ExecutionResult Arm64Backend::Execute(const ir::Program& program,
   state->rip = ctx.rip;
   state->eflags = ctx.eflags;
   state->executed_ops = ctx.steps;
+  for (std::uint32_t i = 0; i < kXmmCount; ++i) {
+    state->xmm[i].lo = ctx.xmm[i * 2u];
+    state->xmm[i].hi = ctx.xmm[i * 2u + 1u];
+  }
 
   if (regions_out.size() == regions.size()) {
     for (std::size_t i = 0; i < regions.size(); ++i) {

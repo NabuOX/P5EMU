@@ -180,6 +180,8 @@ const char* OpClassName(OpClass cls) noexcept {
     case OpClass::kMem8:   return "mem8";
     case OpClass::kMem32:  return "mem32";
     case OpClass::kMem64:  return "mem64";
+    case OpClass::kXmm:    return "xmm";
+    case OpClass::kMem128: return "mem128";
   }
   return "<bad-opclass>";
 }
@@ -216,6 +218,14 @@ const char* MnemonicName(Mnemonic m) noexcept {
     case Mnemonic::kIMul:   return "imul";
     case Mnemonic::kDiv:    return "div";
     case Mnemonic::kIDiv:   return "idiv";
+    case Mnemonic::kMovd:   return "movd";
+    case Mnemonic::kMovq:   return "movq";
+    case Mnemonic::kMovdqa: return "movdqa";
+    case Mnemonic::kMovdqu: return "movdqu";
+    case Mnemonic::kPxor:   return "pxor";
+    case Mnemonic::kPand:   return "pand";
+    case Mnemonic::kPor:    return "por";
+    case Mnemonic::kPaddq:  return "paddq";
   }
   return "<bad-mnemonic>";
 }
@@ -265,6 +275,11 @@ const char* FormName(Form f) noexcept {
     case Form::kIDivRm:  return "idiv r/m";
     case Form::kIMulRR:  return "imul reg, r/m";
     case Form::kIMulRRI: return "imul reg, r/m, imm";
+    case Form::kMovdToXmm:    return "movd/movq xmm, r/m";
+    case Form::kMovdFromXmm:  return "movd/movq r/m, xmm";
+    case Form::kMovdqaToXmm:  return "movdqa/movdqu xmm, xmm/m128";
+    case Form::kMovdqaFromXmm:return "movdqa/movdqu xmm/m128, xmm";
+    case Form::kPackedXmm:    return "packed xmm, xmm/m128";
   }
   return "<bad-form>";
 }
@@ -300,6 +315,14 @@ bool X64Decoder::IsSupported(Mnemonic mnemonic) noexcept {
     case Mnemonic::kIMul:
     case Mnemonic::kDiv:
     case Mnemonic::kIDiv:
+    case Mnemonic::kMovd:
+    case Mnemonic::kMovq:
+    case Mnemonic::kMovdqa:
+    case Mnemonic::kMovdqu:
+    case Mnemonic::kPxor:
+    case Mnemonic::kPand:
+    case Mnemonic::kPor:
+    case Mnemonic::kPaddq:
       return true;
     case Mnemonic::kUnimplemented:
       break;
@@ -311,7 +334,7 @@ std::size_t X64Decoder::SupportedCount() noexcept {
   // Number of distinct supported mnemonics. Kept as an explicit count rather
   // than derived, so the coverage number in reports is a checked constant and a
   // new instruction forces a deliberate decision to bump it.
-  return 29;
+  return 37;
 }
 
 namespace {
@@ -1210,6 +1233,92 @@ Status X64Decoder::DecodeOne(memory::GuestAddr address, const std::uint8_t* code
                        (insn.op_size == 8) ? OpClass::kMem64 : OpClass::kMem32);
       } else {
         insn.src.cls = OpClass::kReg64;
+        insn.src.reg = modrm.rm;
+      }
+      goto finalise;
+    }
+    // ---- SSE / SSE2 foundation (Phase 12) ---------------------------------
+    // 66 0F 6E / 7E : MOVD/MOVQ xmm <-> r/m (REX.W selects 64-bit MOVQ).
+    if ((op2 == 0x6e || op2 == 0x7e) && prefixes.operand_override) {
+      ModRm modrm;
+      const Status st = ReadModRm(&cur, prefixes, &modrm);
+      if (!st.ok()) return st;
+      const bool to_xmm = (op2 == 0x6e);
+      const std::uint8_t w = prefixes.rex_w ? 8u : 4u;
+      insn.mnemonic = (w == 8) ? Mnemonic::kMovq : Mnemonic::kMovd;
+      insn.op_size = w;
+      insn.form = to_xmm ? Form::kMovdToXmm : Form::kMovdFromXmm;
+      const OpClass mem_cls = (w == 8) ? OpClass::kMem64 : OpClass::kMem32;
+      if (to_xmm) {
+        insn.dst.cls = OpClass::kXmm;
+        insn.dst.reg = modrm.reg;
+        if (modrm.is_memory) {
+          FillMemOperand(&insn.src, modrm, mem_cls);
+        } else {
+          insn.src.cls = OpClass::kReg64;
+          insn.src.reg = modrm.rm;
+        }
+      } else {
+        insn.src.cls = OpClass::kXmm;
+        insn.src.reg = modrm.reg;
+        if (modrm.is_memory) {
+          FillMemOperand(&insn.dst, modrm, mem_cls);
+        } else {
+          insn.dst.cls = OpClass::kReg64;
+          insn.dst.reg = modrm.rm;
+        }
+      }
+      goto finalise;
+    }
+    // 66 0F 6F / 7F : MOVDQA ; F3 0F 6F / 7F : MOVDQU.
+    if ((op2 == 0x6f || op2 == 0x7f) &&
+        (prefixes.operand_override || prefixes.rep)) {
+      ModRm modrm;
+      const Status st = ReadModRm(&cur, prefixes, &modrm);
+      if (!st.ok()) return st;
+      insn.mnemonic = prefixes.rep ? Mnemonic::kMovdqu : Mnemonic::kMovdqa;
+      const bool to_xmm = (op2 == 0x6f);
+      insn.form = to_xmm ? Form::kMovdqaToXmm : Form::kMovdqaFromXmm;
+      insn.op_size = 16;
+      if (to_xmm) {
+        insn.dst.cls = OpClass::kXmm;
+        insn.dst.reg = modrm.reg;
+        if (modrm.is_memory) {
+          FillMemOperand(&insn.src, modrm, OpClass::kMem128);
+        } else {
+          insn.src.cls = OpClass::kXmm;
+          insn.src.reg = modrm.rm;
+        }
+      } else {
+        insn.src.cls = OpClass::kXmm;
+        insn.src.reg = modrm.reg;
+        if (modrm.is_memory) {
+          FillMemOperand(&insn.dst, modrm, OpClass::kMem128);
+        } else {
+          insn.dst.cls = OpClass::kXmm;
+          insn.dst.reg = modrm.rm;
+        }
+      }
+      goto finalise;
+    }
+    // 66 0F EF/DB/EB/D4 : PXOR / PAND / POR / PADDQ.
+    if (prefixes.operand_override &&
+        (op2 == 0xef || op2 == 0xdb || op2 == 0xeb || op2 == 0xd4)) {
+      ModRm modrm;
+      const Status st = ReadModRm(&cur, prefixes, &modrm);
+      if (!st.ok()) return st;
+      insn.mnemonic = (op2 == 0xef)   ? Mnemonic::kPxor
+                      : (op2 == 0xdb) ? Mnemonic::kPand
+                      : (op2 == 0xeb) ? Mnemonic::kPor
+                                      : Mnemonic::kPaddq;
+      insn.form = Form::kPackedXmm;
+      insn.op_size = 16;
+      insn.dst.cls = OpClass::kXmm;
+      insn.dst.reg = modrm.reg;
+      if (modrm.is_memory) {
+        FillMemOperand(&insn.src, modrm, OpClass::kMem128);
+      } else {
+        insn.src.cls = OpClass::kXmm;
         insn.src.reg = modrm.rm;
       }
       goto finalise;
