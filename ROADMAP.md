@@ -99,6 +99,16 @@ research task is evidenced):
 - 🟢 **CPU instruction coverage** — decode/semantics breadth (ISA-documented).
 - 🟡 **ARM64 backend improvements** — codegen coverage, multi-region transport.
 
+### CPU arithmetic families — DONE (Phase 11–12)
+
+The arithmetic families are now implemented and documented in
+[`docs/architecture/cpu.md`](docs/architecture/cpu.md): a synchronous CPU fault
+model (`kCpuFault`/`kDivideError`), `ADC`/`SBB` (including accumulator-immediate
+forms), `MUL`/`IMUL`/`DIV`/`IDIV` at **8/16/32/64-bit** (8-bit via the new
+AH/CH/DH/BH register model), and 16-bit + memory-source `PUSH`/`POP`. Remaining
+CPU work is the out-of-scope list (REP/string, SSE/AVX, x87, atomics/`LOCK`, full
+exception delivery, syscalls, optimizer/register allocation).
+
 ### Phase 9 tracks (executable / dynamic linking)
 
 Research-only (evidence first — output is classified facts, not code):

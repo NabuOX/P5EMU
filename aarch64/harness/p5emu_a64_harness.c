@@ -132,6 +132,126 @@ static uint64_t h_store(uint64_t handle, uint64_t addr, uint64_t width,
   return 0;
 }
 
+/* Arithmetic helper (Phase 11). ONE definition of the x86 arithmetic semantics,
+ * shared (by construction) with the host interpreter, so the interpreter and
+ * this backend agree on result, flags, and the divide fault. Mirrors
+ * ReferenceInterpreter.cpp exactly. */
+#define EFLAG_CF (1ull << 0)
+#define EFLAG_PF (1ull << 2)
+#define EFLAG_AF (1ull << 4)
+#define EFLAG_ZF (1ull << 6)
+#define EFLAG_SF (1ull << 7)
+#define EFLAG_OF (1ull << 11)
+
+static int arith_parity_even(uint64_t v) {
+  v &= 0xffu;
+  v ^= v >> 4;
+  v ^= v >> 2;
+  v ^= v >> 1;
+  return (v & 1u) == 0;
+}
+
+static __int128 arith_sext128(unsigned __int128 v, unsigned total_bits) {
+  if (total_bits == 0) return 0;
+  if (total_bits >= 128) return (__int128)v;
+  unsigned sh = 128u - total_bits;
+  return (__int128)(v << sh) >> sh;
+}
+
+static uint64_t h_arith(uint64_t op, uint64_t width, uint64_t a, uint64_t b,
+                        uint64_t c, uint64_t* out2, uint64_t* flags_out,
+                        uint64_t* fault_out) {
+  unsigned bits = (unsigned)(8u * width);
+  uint64_t m = (width >= 8) ? ~(uint64_t)0 : (((uint64_t)1 << bits) - 1u);
+  a &= m;
+  b &= m;
+  uint64_t f = 0;
+  uint64_t result = 0;
+  uint64_t second = 0;
+  *fault_out = 0;
+
+  if (op == P5EMU_A64_ARITH_ADC) {
+    unsigned __int128 s = (unsigned __int128)a + b + c;
+    result = (uint64_t)s & m;
+    if ((s >> bits) & 1u) f |= EFLAG_CF;
+    uint64_t sa = (a >> (bits - 1u)) & 1u, sb = (b >> (bits - 1u)) & 1u,
+             sr = (result >> (bits - 1u)) & 1u;
+    if (sa == sb && sr != sa) f |= EFLAG_OF;
+    if ((int)(a & 0xfu) + (int)(b & 0xfu) + (int)c > 15) f |= EFLAG_AF;
+  } else if (op == P5EMU_A64_ARITH_SBB) {
+    result = (a - b - c) & m;
+    if (a < b || (a == b && c == 1)) f |= EFLAG_CF;
+    uint64_t sa = (a >> (bits - 1u)) & 1u, sb = (b >> (bits - 1u)) & 1u,
+             sr = (result >> (bits - 1u)) & 1u;
+    if (sa != sb && sr != sa) f |= EFLAG_OF;
+    if ((int)(a & 0xfu) - (int)(b & 0xfu) - (int)c < 0) f |= EFLAG_AF;
+  } else if (op == P5EMU_A64_ARITH_MUL) {
+    unsigned __int128 p = (unsigned __int128)a * b;
+    result = (uint64_t)p & m;
+    second = (uint64_t)(p >> bits) & m;
+    if (second != 0) f |= EFLAG_CF | EFLAG_OF;
+  } else if (op == P5EMU_A64_ARITH_IMUL) {
+    __int128 p = arith_sext128((unsigned __int128)a, bits) *
+                 arith_sext128((unsigned __int128)b, bits);
+    result = (uint64_t)p & m;
+    second = (uint64_t)(p >> bits) & m;
+    if (p != arith_sext128((unsigned __int128)result, bits)) {
+      f |= EFLAG_CF | EFLAG_OF;
+    }
+  } else if (op == P5EMU_A64_ARITH_DIV || op == P5EMU_A64_ARITH_IDIV) {
+    unsigned __int128 ud = ((unsigned __int128)a << bits) | b; /* a=hi b=lo */
+    if (op == P5EMU_A64_ARITH_DIV) {
+      if (c == 0) { *fault_out = P5EMU_A64_CPU_FAULT_DIVIDE; return 0; }
+      unsigned __int128 q = ud / (unsigned __int128)c;
+      unsigned __int128 r = ud % (unsigned __int128)c;
+      if (q > (unsigned __int128)m) {
+        *fault_out = P5EMU_A64_CPU_FAULT_DIVIDE;
+        return 0;
+      }
+      result = (uint64_t)q & m;
+      second = (uint64_t)r & m;
+    } else {
+      __int128 dividend = arith_sext128(ud, 2u * bits);
+      __int128 d = arith_sext128((unsigned __int128)c, bits);
+      if (d == 0) { *fault_out = P5EMU_A64_CPU_FAULT_DIVIDE; return 0; }
+      __int128 q;
+      __int128 r;
+      if (d == -1) {
+        if (dividend == ((__int128)1 << 127)) {
+          *fault_out = P5EMU_A64_CPU_FAULT_DIVIDE;
+          return 0;
+        }
+        q = -dividend;
+        r = 0;
+      } else {
+        q = dividend / d;
+        r = dividend % d;
+      }
+      __int128 qmin = -((__int128)1 << (bits - 1u));
+      __int128 qmax = ((__int128)1 << (bits - 1u)) - 1;
+      if (q < qmin || q > qmax) {
+        *fault_out = P5EMU_A64_CPU_FAULT_DIVIDE;
+        return 0;
+      }
+      result = (uint64_t)q & m;
+      second = (uint64_t)r & m;
+    }
+  }
+
+  /* ZF/SF/PF are defined only for ADC/SBB here; MUL/IMUL leave them undefined,
+   * and DIV/IDIV write no defined flags at all. They are set identically on the
+   * host side so the differential comparison agrees. */
+  if (op == P5EMU_A64_ARITH_ADC || op == P5EMU_A64_ARITH_SBB) {
+    if (result == 0) f |= EFLAG_ZF;
+    if ((result >> (bits - 1u)) & 1u) f |= EFLAG_SF;
+    if (arith_parity_even(result)) f |= EFLAG_PF;
+  }
+
+  if (out2) *out2 = second;
+  if (flags_out) *flags_out = f;
+  return result;
+}
+
 /* HLE dispatch (TEST INFRASTRUCTURE, P5EMU-owned synthetics). The trampoline
  * base/stride MUST match the host HleRegistry. NOT a PS5 address. */
 #define HLE_BASE 0x70000000ull
@@ -246,6 +366,7 @@ static int execute_record(const uint8_t* req, size_t req_size, size_t* off_io,
   ctx.fn_load = (uint64_t)(uintptr_t)&h_load;
   ctx.fn_store = (uint64_t)(uintptr_t)&h_store;
   ctx.fn_hle = (uint64_t)(uintptr_t)&hle_dispatch;
+  ctx.fn_arith = (uint64_t)(uintptr_t)&h_arith;
 
   const long page = sysconf(_SC_PAGESIZE);
   const size_t page_sz = (page > 0) ? (size_t)page : 4096u;

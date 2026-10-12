@@ -207,6 +207,15 @@ const char* MnemonicName(Mnemonic m) noexcept {
     case Mnemonic::kRet:    return "ret";
     case Mnemonic::kNop:    return "nop";
     case Mnemonic::kInt3:   return "int3";
+    case Mnemonic::kPush:   return "push";
+    case Mnemonic::kPop:    return "pop";
+    case Mnemonic::kLeave:  return "leave";
+    case Mnemonic::kAdc:    return "adc";
+    case Mnemonic::kSbb:    return "sbb";
+    case Mnemonic::kMul:    return "mul";
+    case Mnemonic::kIMul:   return "imul";
+    case Mnemonic::kDiv:    return "div";
+    case Mnemonic::kIDiv:   return "idiv";
   }
   return "<bad-mnemonic>";
 }
@@ -246,6 +255,16 @@ const char* FormName(Form f) noexcept {
     case Form::kRetn:    return "ret";
     case Form::kNop:     return "nop";
     case Form::kInt3:    return "int3";
+    case Form::kPushR:   return "push r64";
+    case Form::kPushImm: return "push imm";
+    case Form::kPopR:    return "pop r64";
+    case Form::kLeave:   return "leave";
+    case Form::kMulRm:   return "mul r/m";
+    case Form::kIMulRm:  return "imul r/m";
+    case Form::kDivRm:   return "div r/m";
+    case Form::kIDivRm:  return "idiv r/m";
+    case Form::kIMulRR:  return "imul reg, r/m";
+    case Form::kIMulRRI: return "imul reg, r/m, imm";
   }
   return "<bad-form>";
 }
@@ -272,6 +291,15 @@ bool X64Decoder::IsSupported(Mnemonic mnemonic) noexcept {
     case Mnemonic::kRet:
     case Mnemonic::kNop:
     case Mnemonic::kInt3:
+    case Mnemonic::kPush:
+    case Mnemonic::kPop:
+    case Mnemonic::kLeave:
+    case Mnemonic::kAdc:
+    case Mnemonic::kSbb:
+    case Mnemonic::kMul:
+    case Mnemonic::kIMul:
+    case Mnemonic::kDiv:
+    case Mnemonic::kIDiv:
       return true;
     case Mnemonic::kUnimplemented:
       break;
@@ -283,7 +311,7 @@ std::size_t X64Decoder::SupportedCount() noexcept {
   // Number of distinct supported mnemonics. Kept as an explicit count rather
   // than derived, so the coverage number in reports is a checked constant and a
   // new instruction forces a deliberate decision to bump it.
-  return 20;
+  return 29;
 }
 
 namespace {
@@ -835,6 +863,11 @@ Status X64Decoder::DecodeOne(memory::GuestAddr address, const std::uint8_t* code
         {0x03, Mnemonic::kAdd, true, false},  {0x0b, Mnemonic::kOr, true, false},
         {0x23, Mnemonic::kAnd, true, false},  {0x2b, Mnemonic::kSub, true, false},
         {0x33, Mnemonic::kXor, true, false},  {0x3b, Mnemonic::kCmp, true, false},
+        // --- ADC / SBB (Phase 11) ---
+        {0x10, Mnemonic::kAdc, false, true}, {0x12, Mnemonic::kAdc, true, true},
+        {0x18, Mnemonic::kSbb, false, true}, {0x1a, Mnemonic::kSbb, true, true},
+        {0x11, Mnemonic::kAdc, false, false}, {0x13, Mnemonic::kAdc, true, false},
+        {0x19, Mnemonic::kSbb, false, false}, {0x1b, Mnemonic::kSbb, true, false},
     };
 
     const AluForm* entry = nullptr;
@@ -929,10 +962,10 @@ Status X64Decoder::DecodeOne(memory::GuestAddr address, const std::uint8_t* code
     }
 
     static const Mnemonic kByReg[8] = {
-        Mnemonic::kAdd, Mnemonic::kOr, Mnemonic::kAdd /*ADC: unsupported*/,
-        Mnemonic::kAdd /*SBB: unsupported*/, Mnemonic::kAnd, Mnemonic::kSub,
+        Mnemonic::kAdd, Mnemonic::kOr, Mnemonic::kAdc,
+        Mnemonic::kSbb, Mnemonic::kAnd, Mnemonic::kSub,
         Mnemonic::kXor, Mnemonic::kCmp};
-    static const bool kSupportedReg[8] = {true, true, false, false,
+    static const bool kSupportedReg[8] = {true, true, true, true,
                                           true,  true,  true,  true};
 
     if (!kSupportedReg[modrm.reg & 0x07u]) {
@@ -1160,6 +1193,27 @@ Status X64Decoder::DecodeOne(memory::GuestAddr address, const std::uint8_t* code
       }
       goto finalise;
     }
+    if (op2 == 0xaf) {
+      // IMUL r, r/m  (two-operand form). Intel SDM Vol. 2 §2.2.1.
+      ModRm modrm;
+      const Status st = ReadModRm(&cur, prefixes, &modrm);
+      if (!st.ok()) {
+        return st;
+      }
+      insn.mnemonic = Mnemonic::kIMul;
+      insn.form = Form::kIMulRR;
+      insn.op_size = prefixes.operand_override ? 2u : (prefixes.rex_w ? 8u : 4u);
+      insn.dst.cls = OpClass::kReg64;
+      insn.dst.reg = modrm.reg;
+      if (modrm.is_memory) {
+        FillMemOperand(&insn.src, modrm,
+                       (insn.op_size == 8) ? OpClass::kMem64 : OpClass::kMem32);
+      } else {
+        insn.src.cls = OpClass::kReg64;
+        insn.src.reg = modrm.rm;
+      }
+      goto finalise;
+    }
     return StatusCode::kUnimplementedInstruction;
   }
 
@@ -1294,6 +1348,183 @@ Status X64Decoder::DecodeOne(memory::GuestAddr address, const std::uint8_t* code
     goto finalise;
   }
 
+  // --- PUSH / POP r64: 0x50+rd / 0x58+rd ------------------------------------
+  // Intel SDM Vol. 2 §2.2.1, Table 2-3. In 64-bit mode the default operand size
+  // is 64 bits; a 0x66 prefix selects 16 bits, which is not in the supported set
+  // and is reported rather than approximated.
+  if (opcode >= 0x50 && opcode <= 0x57) {
+    insn.mnemonic = Mnemonic::kPush;
+    insn.form = Form::kPushR;
+    insn.op_size = prefixes.operand_override ? 2u : 8u;  // 16- or 64-bit
+    insn.dst.cls = OpClass::kReg64;
+    insn.dst.reg = static_cast<std::uint8_t>((opcode - 0x50u) |
+                                             (prefixes.rex_b ? 0x08u : 0x00u));
+    goto finalise;
+  }
+  if (opcode >= 0x58 && opcode <= 0x5f) {
+    insn.mnemonic = Mnemonic::kPop;
+    insn.form = Form::kPopR;
+    insn.op_size = prefixes.operand_override ? 2u : 8u;  // 16- or 64-bit
+    insn.dst.cls = OpClass::kReg64;
+    insn.dst.reg = static_cast<std::uint8_t>((opcode - 0x58u) |
+                                             (prefixes.rex_b ? 0x08u : 0x00u));
+    goto finalise;
+  }
+
+  // --- 0xFF /6 PUSH r/m ; 0x8F /0 POP r/m -----------------------------------
+  if (opcode == 0xff || opcode == 0x8f) {
+    ModRm modrm;
+    const Status st = ReadModRm(&cur, prefixes, &modrm);
+    if (!st.ok()) {
+      return st;
+    }
+    const bool is_push = (opcode == 0xff);
+    const std::uint8_t need_reg = is_push ? 6u : 0u;
+    if ((modrm.reg & 0x07u) != need_reg) {
+      return StatusCode::kUnimplementedInstruction;
+    }
+    insn.mnemonic = is_push ? Mnemonic::kPush : Mnemonic::kPop;
+    insn.form = is_push ? Form::kPushR : Form::kPopR;
+    insn.op_size = prefixes.operand_override ? 2u : 8u;
+    if (modrm.is_memory) {
+      FillMemOperand(&insn.dst, modrm,
+                     (insn.op_size == 2) ? OpClass::kMem32 : OpClass::kMem64);
+    } else {
+      insn.dst.cls = OpClass::kReg64;
+      insn.dst.reg = modrm.rm;
+    }
+    goto finalise;
+  }
+
+  // --- PUSH imm: 0x68 imm16/32, 0x6A imm8 (sign-extended) -------------------
+  if (opcode == 0x68 || opcode == 0x6a) {
+    insn.mnemonic = Mnemonic::kPush;
+    insn.form = Form::kPushImm;
+    insn.op_size = prefixes.operand_override ? 2u : 8u;
+    if (opcode == 0x6a) {
+      insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(1), 8));
+    } else if (insn.op_size == 2) {
+      insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(2), 16));
+    } else {
+      insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(4), 32));
+    }
+    insn.imm_is_signed_extension = true;
+    if (!cur.Ok()) {
+      return StatusCode::kDecodeError;
+    }
+    goto finalise;
+  }
+
+  // --- LEAVE: 0xC9 ----------------------------------------------------------
+  if (opcode == 0xc9) {
+    insn.mnemonic = Mnemonic::kLeave;
+    insn.form = Form::kLeave;
+    insn.op_size = 8;
+    goto finalise;
+  }
+
+  // --- accumulator immediate: 0x14/0x15 ADC, 0x1C/0x1D SBB ------------------
+  // Intel SDM Vol. 2 §2.2.1. AL/eAX is the implicit destination.
+  if (opcode == 0x14 || opcode == 0x15 || opcode == 0x1c || opcode == 0x1d) {
+    const bool adc = (opcode == 0x14 || opcode == 0x15);
+    const bool byte_form = (opcode == 0x14 || opcode == 0x1c);
+    insn.mnemonic = adc ? Mnemonic::kAdc : Mnemonic::kSbb;
+    insn.src.cls = OpClass::kNone;  // immediate; the translator uses insn.imm
+    insn.form = Form::kR32RI32;
+    insn.dst.reg = 0;  // AL / eAX
+    if (byte_form) {
+      insn.op_size = 1;
+      insn.dst.cls = OpClass::kReg8;
+      insn.imm = cur.Uint(1);
+    } else {
+      insn.op_size =
+          prefixes.operand_override ? 2u : (prefixes.rex_w ? 8u : 4u);
+      insn.dst.cls = OpClass::kReg64;
+      if (insn.op_size == 2) {
+        insn.imm = cur.Uint(2);
+      } else if (insn.op_size == 8) {
+        insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(4), 32));
+        insn.imm_is_signed_extension = true;
+      } else {
+        insn.imm = cur.Uint(4);
+      }
+    }
+    if (!cur.Ok()) {
+      return StatusCode::kDecodeError;
+    }
+    goto finalise;
+  }
+
+  // --- F6 / F7: MUL / IMUL / DIV / IDIV (implicit RAX/RDX, and AH for 8-bit) --
+  // Intel SDM Vol. 2 §2.2.1. ModRM.reg selects: /4 MUL /5 IMUL /6 DIV /7 IDIV.
+  if (opcode == 0xf6 || opcode == 0xf7) {
+    ModRm modrm;
+    const Status st = ReadModRm(&cur, prefixes, &modrm);
+    if (!st.ok()) {
+      return st;
+    }
+    Mnemonic m = Mnemonic::kUnimplemented;
+    Form f = Form::kUnimplemented;
+    switch (modrm.reg & 0x07u) {
+      case 4: m = Mnemonic::kMul;  f = Form::kMulRm;  break;
+      case 5: m = Mnemonic::kIMul; f = Form::kIMulRm; break;
+      case 6: m = Mnemonic::kDiv;  f = Form::kDivRm;  break;
+      case 7: m = Mnemonic::kIDiv; f = Form::kIDivRm; break;
+      default: return StatusCode::kUnimplementedInstruction;
+    }
+    insn.mnemonic = m;
+    insn.form = f;
+    // 8-bit uses AH; 16/32/64 use the DX/EDX/RDX high register.
+    insn.op_size = (opcode == 0xf6)
+                       ? 1u
+                       : (prefixes.operand_override ? 2u
+                                                    : (prefixes.rex_w ? 8u : 4u));
+    if (modrm.is_memory) {
+      FillMemOperand(&insn.dst, modrm,
+                     (insn.op_size == 1)
+                         ? OpClass::kMem8
+                         : ((insn.op_size == 8) ? OpClass::kMem64
+                                                : OpClass::kMem32));
+    } else {
+      insn.dst.cls = (insn.op_size == 1) ? OpClass::kReg8 : OpClass::kReg64;
+      insn.dst.reg = modrm.rm;
+    }
+    goto finalise;
+  }
+
+  // --- 0x69 / 0x6B: IMUL r, r/m, imm ----------------------------------------
+  if (opcode == 0x69 || opcode == 0x6b) {
+    ModRm modrm;
+    const Status st = ReadModRm(&cur, prefixes, &modrm);
+    if (!st.ok()) {
+      return st;
+    }
+    insn.mnemonic = Mnemonic::kIMul;
+    insn.form = Form::kIMulRRI;
+    insn.op_size = prefixes.operand_override ? 2u : (prefixes.rex_w ? 8u : 4u);
+    insn.dst.cls = OpClass::kReg64;
+    insn.dst.reg = modrm.reg;
+    if (modrm.is_memory) {
+      FillMemOperand(&insn.src, modrm,
+                     (insn.op_size == 8) ? OpClass::kMem64 : OpClass::kMem32);
+    } else {
+      insn.src.cls = OpClass::kReg64;
+      insn.src.reg = modrm.rm;
+    }
+    if (opcode == 0x6b) {
+      insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(1), 8));
+    } else if (insn.op_size == 2) {
+      insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(2), 16));
+    } else {
+      insn.imm = static_cast<std::uint64_t>(SignExtend(cur.Uint(4), 32));
+    }
+    insn.imm_is_signed_extension = true;
+    if (!cur.Ok()) {
+      return StatusCode::kDecodeError;
+    }
+    goto finalise;
+  }
+
   // Not in the Phase-1 subset. Reported honestly rather than partially decoded.
   return StatusCode::kUnimplementedInstruction;
 
@@ -1309,6 +1540,15 @@ finalise:
   if (insn.mnemonic == Mnemonic::kUnimplemented) {
     return StatusCode::kUnimplementedInstruction;
   }
+  // High-byte operands: an 8-bit register 4..7 with no REX prefix is AH/CH/DH/BH.
+  const auto mark_high_byte = [&prefixes](Operand* o) {
+    if (o->cls == OpClass::kReg8 && !prefixes.has_rex && o->reg >= 4 &&
+        o->reg <= 7) {
+      o->high_byte = true;
+    }
+  };
+  mark_high_byte(&insn.dst);
+  mark_high_byte(&insn.src);
   *out = insn;
   return StatusCode::kOk;
 }

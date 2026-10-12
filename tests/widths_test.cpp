@@ -940,3 +940,640 @@ P5EMU_TEST(Arm64Random, BatchedRandomizedDifferential) {
   }
   CHECK_EQ(divergences, 0);
 }
+
+// ===========================================================================
+// Phase 11: stack family (PUSH / POP / LEAVE), raw-x86 end to end.
+//
+// Every case starts from independently authored x86 instruction bytes and is run
+// through decode -> IR -> { reference interpreter | AArch64 }. Expected values
+// are hand-derived from the Intel SDM (Vol. 2 §2.2.1), never from P5EMU output.
+// ===========================================================================
+namespace {
+
+std::uint64_t ReadLe64(const std::vector<std::uint8_t>& img, std::size_t off) {
+  std::uint64_t v = 0;
+  for (int i = 0; i < 8; ++i) {
+    v |= static_cast<std::uint64_t>(img[off + static_cast<std::size_t>(i)])
+         << (8 * i);
+  }
+  return v;
+}
+
+// Runs raw x86 through the reference interpreter against a fresh region, seeding
+// `seed` bytes at kMemBase when non-empty, and captures the final memory image.
+bool RunAndCapture(const std::vector<std::uint8_t>& code, CpuState* state,
+                   const std::vector<std::uint8_t>& seed,
+                   std::vector<std::uint8_t>* out_image) {
+  ir::Program program;
+  if (!TranslateX86(code, &program)) return false;
+  memory::LinearGuestMemory mem =
+      memory::LinearGuestMemory::MakeCodeAndData(kMemBase, kMemSize);
+  if (!seed.empty() &&
+      !mem.DebugFill(kMemBase, seed.data(), seed.size()).ok()) {
+    return false;
+  }
+  ReferenceInterpreter interp(kStepLimit);
+  interp.Execute(program, state, mem);
+  out_image->assign(kMemSize, 0);
+  return mem.ReadRange(kMemBase, kMemSize, out_image).ok();
+}
+
+}  // namespace
+
+P5EMU_TEST(CpuStack, PushDecrementsThenStores) {
+  // push rax (0x50) ; pop rbx (0x5B)
+  const std::vector<std::uint8_t> code = {0x50, 0x5B};
+  CpuState s;
+  s.rax = 0x1122334455667788ull;
+  s.rsp = kMemBase + 0x800;
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, {}, &img));
+  // PUSH stored at the NEW rsp (old - 8); POP restored rsp and loaded rbx.
+  CHECK_EQ(ReadLe64(img, 0x7F8), std::uint64_t{0x1122334455667788ull});
+  CHECK_EQ(s.rbx, std::uint64_t{0x1122334455667788ull});
+  CHECK_EQ(s.rsp, std::uint64_t{kMemBase + 0x800});
+
+  CpuState d;
+  d.rax = 0x1122334455667788ull;
+  d.rsp = kMemBase + 0x800;
+  ExpectAgree(CompareX86(code, d, {{kMemBase + 0x7F8, 8}}), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuStack, PushImmediateSignExtendsTo64) {
+  // push imm8 -1 (0x6A 0xFF): stored value is 0xFFFFFFFFFFFFFFFF.
+  {
+    const std::vector<std::uint8_t> code = {0x6A, 0xFF};
+    CpuState s;
+    s.rsp = kMemBase + 0x800;
+    std::vector<std::uint8_t> img;
+    REQUIRE(RunAndCapture(code, &s, {}, &img));
+    CHECK_EQ(ReadLe64(img, 0x7F8), ~std::uint64_t{0});
+    CHECK_EQ(s.rsp, std::uint64_t{kMemBase + 0x7F8});
+  }
+  // push imm32 0x80000000 (0x68 ...): sign-extended to 0xFFFFFFFF80000000.
+  {
+    const std::vector<std::uint8_t> code = {0x68, 0x00, 0x00, 0x00, 0x80};
+    CpuState s;
+    s.rsp = kMemBase + 0x800;
+    std::vector<std::uint8_t> img;
+    REQUIRE(RunAndCapture(code, &s, {}, &img));
+    CHECK_EQ(ReadLe64(img, 0x7F8), std::uint64_t{0xFFFFFFFF80000000ull});
+
+    CpuState d;
+    d.rsp = kMemBase + 0x800;
+    ExpectAgree(CompareX86(code, d, {{kMemBase + 0x7F8, 8}}), __FILE__,
+                __LINE__);
+  }
+}
+
+P5EMU_TEST(CpuStack, PopReadsOldTopAndAdvancesRsp) {
+  // mov rcx, [rsp-seeded] ; pop rcx  -> simplest: seed [rsp], pop rcx (0x59)
+  const std::vector<std::uint8_t> code = {0x59};  // pop rcx
+  const std::uint64_t top = kMemBase + 0x800;
+  CpuState s;
+  s.rsp = top;
+  std::vector<std::uint8_t> seed(kMemSize, 0);
+  const std::uint64_t sentinel = 0xAABBCCDDEEFF0011ull;
+  for (int i = 0; i < 8; ++i) {
+    seed[0x800 + static_cast<std::size_t>(i)] =
+        static_cast<std::uint8_t>((sentinel >> (8 * i)) & 0xFFu);
+  }
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, seed, &img));
+  CHECK_EQ(s.rcx, sentinel);                    // read from the OLD top
+  CHECK_EQ(s.rsp, top + 8);                     // then advanced
+
+  CpuState d;
+  d.rsp = top;
+  ExpectAgree(CompareX86(code, d, {{top, 8}}, eflags::kAllMask, seed), __FILE__,
+              __LINE__);
+}
+
+P5EMU_TEST(CpuStack, LeavePopsFromRbpNotRsp) {
+  // leave (0xC9): RSP := RBP; RBP := [RBP]; RSP := RBP + 8.
+  const std::vector<std::uint8_t> code = {0xC9};
+  const std::uint64_t rbp = kMemBase + 0x800;
+  const std::uint64_t rsp = kMemBase + 0x100;  // deliberately != rbp
+  const std::uint64_t saved = 0x1234567890ABCDEFull;
+  std::vector<std::uint8_t> seed(kMemSize, 0);
+  for (int i = 0; i < 8; ++i) {
+    seed[0x800 + static_cast<std::size_t>(i)] =
+        static_cast<std::uint8_t>((saved >> (8 * i)) & 0xFFu);
+  }
+  CpuState s;
+  s.rbp = rbp;
+  s.rsp = rsp;
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, seed, &img));
+  // The popped value came from [RBP], NOT from the old RSP.
+  CHECK_EQ(s.rbp, saved);
+  CHECK_EQ(s.rsp, rbp + 8);
+
+  CpuState d;
+  d.rbp = rbp;
+  d.rsp = rsp;
+  ExpectAgree(CompareX86(code, d, {}, eflags::kAllMask, seed), __FILE__,
+              __LINE__);
+}
+
+P5EMU_TEST(CpuStack, MultiInstructionSequence) {
+  // mov rax, 0x11 ; push rax ; mov rax, 0x22 ; pop rbx ; ret
+  //   48 C7 C0 11 00 00 00   push 50  48 C7 C0 22 00 00 00  pop 5B
+  const std::vector<std::uint8_t> code = {
+      0x48, 0xC7, 0xC0, 0x11, 0x00, 0x00, 0x00,  // mov rax,0x11
+      0x50,                                       // push rax
+      0x48, 0xC7, 0xC0, 0x22, 0x00, 0x00, 0x00,  // mov rax,0x22
+      0x5B,                                       // pop rbx
+  };
+  CpuState s;
+  s.rsp = kMemBase + 0x800;
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, {}, &img));
+  CHECK_EQ(s.rax, std::uint64_t{0x22});
+  CHECK_EQ(s.rbx, std::uint64_t{0x11});
+  CHECK_EQ(s.rsp, std::uint64_t{kMemBase + 0x800});
+
+  CpuState d;
+  d.rsp = kMemBase + 0x800;
+  ExpectAgree(CompareX86(code, d, {{kMemBase + 0x7F8, 8}}), __FILE__, __LINE__);
+}
+
+// Negative proof: an implementation that updates RSP in the wrong direction, or
+// that pops LEAVE from the OLD RSP, would produce different observable state than
+// the architecture requires. These assertions pin the correct behaviour.
+P5EMU_TEST(CpuStackNegative, RspDirectionAndLeaveSourceArePinned) {
+  // PUSH must DECREMENT RSP by 8 (not increment).
+  {
+    const std::vector<std::uint8_t> code = {0x50};  // push rax
+    CpuState s;
+    s.rax = 1;
+    s.rsp = kMemBase + 0x800;
+    std::vector<std::uint8_t> img;
+    REQUIRE(RunAndCapture(code, &s, {}, &img));
+    CHECK_EQ(s.rsp, std::uint64_t{kMemBase + 0x7F8});
+    CHECK(s.rsp != kMemBase + 0x808);
+  }
+  // LEAVE with RBP == RSP must still pop from [RBP].
+  {
+    const std::vector<std::uint8_t> code = {0xC9};
+    const std::uint64_t rbp = kMemBase + 0x400;
+    std::vector<std::uint8_t> seed(kMemSize, 0);
+    for (int i = 0; i < 8; ++i) {
+      seed[0x400 + static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(i);
+    }
+    CpuState s;
+    s.rbp = rbp;
+    s.rsp = rbp;
+    std::vector<std::uint8_t> img;
+    REQUIRE(RunAndCapture(code, &s, seed, &img));
+    CHECK_EQ(s.rbp, std::uint64_t{0x0706050403020100ull});
+    CHECK_EQ(s.rsp, rbp + 8);
+  }
+}
+
+// ===========================================================================
+// Phase 11: arithmetic families (ADC / SBB / MUL / IMUL / DIV / IDIV).
+// Expected values are hand-derived from the Intel SDM; differential agreement
+// is required on every case.
+// ===========================================================================
+namespace {
+constexpr std::uint64_t kMulMask = eflags::kCf | eflags::kOf;  // MUL/IMUL
+constexpr std::uint64_t kDivMask = 0;                          // DIV/IDIV
+
+bool Faulted(const ExecutionResult& r) {
+  return r.reason == TerminationReason::kCpuFault &&
+         r.status.code() == StatusCode::kDivideError;
+}
+}  // namespace
+
+P5EMU_TEST(CpuArith, AdcConsumesIncomingCarry) {
+  const std::vector<std::uint8_t> code = {0x48, 0x11, 0xD8};  // adc rax, rbx
+  {  // CF=0: 5+7=12
+    CpuState s; s.rax = 5; s.rbx = 7; s.eflags = 0;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{12});
+    CHECK((s.eflags & eflags::kCf) == 0);
+  }
+  {  // CF=1: 5+7+1=13  (result carries only because of the incoming CF)
+    CpuState s; s.rax = 5; s.rbx = 7; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{13});
+  }
+  {  // max + 0 + 1 = 0, CF=1, ZF=1
+    CpuState s; s.rax = ~0ull; s.rbx = 0; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0});
+    CHECK((s.eflags & eflags::kCf) != 0);
+    CHECK((s.eflags & eflags::kZf) != 0);
+  }
+  {  // 32-bit: adc eax, ebx (11 D8) with CF=1
+    const std::vector<std::uint8_t> c32 = {0x11, 0xD8};
+    CpuState s; s.rax = 0xFFFFFFFFull; s.rbx = 0; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(c32, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0});  // zero-extended to RAX
+  }
+  CpuState d; d.rax = 5; d.rbx = 7; d.eflags = eflags::kCf;
+  ExpectAgree(CompareX86(code, d), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, SbbConsumesIncomingBorrow) {
+  const std::vector<std::uint8_t> code = {0x48, 0x19, 0xD8};  // sbb rax, rbx
+  {  // CF=0: 10-3=7
+    CpuState s; s.rax = 10; s.rbx = 3; s.eflags = 0;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{7});
+  }
+  {  // CF=1: 10-3-1=6
+    CpuState s; s.rax = 10; s.rbx = 3; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{6});
+  }
+  {  // 0-0-1 = max, CF=1, SF=1
+    CpuState s; s.rax = 0; s.rbx = 0; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, ~0ull);
+    CHECK((s.eflags & eflags::kCf) != 0);
+    CHECK((s.eflags & eflags::kSf) != 0);
+  }
+  CpuState d; d.rax = 10; d.rbx = 3; d.eflags = eflags::kCf;
+  ExpectAgree(CompareX86(code, d), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, MulProducesDoubleWidth) {
+  const std::vector<std::uint8_t> code = {0x48, 0xF7, 0xE3};  // mul rbx
+  {  // 6*7=42
+    CpuState s; s.rax = 6; s.rbx = 7;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{42});
+    CHECK_EQ(s.rdx, std::uint64_t{0});
+    CHECK((s.eflags & eflags::kCf) == 0);
+  }
+  {  // 2^63 * 2 = 2^64 -> RDX:RAX = 1:0, CF=OF=1
+    CpuState s; s.rax = 0x8000000000000000ull; s.rbx = 2;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0});
+    CHECK_EQ(s.rdx, std::uint64_t{1});
+    CHECK((s.eflags & eflags::kCf) != 0);
+    CHECK((s.eflags & eflags::kOf) != 0);
+  }
+  {  // 32-bit: mul ebx -> EDX:EAX = 0xFFFFFFFE:0x00000001 (zero-extended)
+    const std::vector<std::uint8_t> c32 = {0xF7, 0xE3};
+    CpuState s; s.rax = 0xFFFFFFFFull; s.rbx = 0xFFFFFFFFull;
+    ExecutionResult r; REQUIRE(RunInterp(c32, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0x00000001ull});       // EAX zero-extends RAX
+    CHECK_EQ(s.rdx, std::uint64_t{0xFFFFFFFEull});       // EDX zero-extends RDX
+  }
+  CpuState d; d.rax = 0x8000000000000000ull; d.rbx = 2;
+  ExpectAgree(CompareX86(code, d, {}, kMulMask), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, ImulOneOperandSigned) {
+  const std::vector<std::uint8_t> code = {0x48, 0xF7, 0xEB};  // imul rbx
+  {  // -3 * 5 = -15, sign-extended high, CF=OF=0
+    CpuState s; s.rax = static_cast<std::uint64_t>(-3); s.rbx = 5;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, static_cast<std::uint64_t>(-15));
+    CHECK_EQ(s.rdx, ~0ull);
+    CHECK((s.eflags & eflags::kCf) == 0);
+  }
+  {  // -2^63 * 2 = -2^64 -> high all ones, CF=OF=1
+    CpuState s; s.rax = 0x8000000000000000ull; s.rbx = 2;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0});
+    CHECK_EQ(s.rdx, ~0ull);
+    CHECK((s.eflags & eflags::kCf) != 0);
+  }
+  CpuState d; d.rax = static_cast<std::uint64_t>(-3); d.rbx = 5;
+  ExpectAgree(CompareX86(code, d, {}, kMulMask), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, ImulTwoOperandAndImmediate) {
+  const std::vector<std::uint8_t> rr = {0x48, 0x0F, 0xAF, 0xC3};  // imul rax, rbx
+  {  // -3 * 5 = -15 (low half)
+    CpuState s; s.rax = static_cast<std::uint64_t>(-3); s.rbx = 5;
+    ExecutionResult r; REQUIRE(RunInterp(rr, &s, &r));
+    CHECK_EQ(s.rax, static_cast<std::uint64_t>(-15));
+    CHECK((s.eflags & eflags::kCf) == 0);
+  }
+  {  // 2^62 * 4 = 2^64 -> low half 0, CF=OF=1
+    CpuState s; s.rax = 0x4000000000000000ull; s.rbx = 4;
+    ExecutionResult r; REQUIRE(RunInterp(rr, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0});
+    CHECK((s.eflags & eflags::kCf) != 0);
+  }
+  const std::vector<std::uint8_t> ri = {0x48, 0x6B, 0xC3, 0x05};  // imul rax,rbx,5
+  {
+    CpuState s; s.rax = 0; s.rbx = 100;
+    ExecutionResult r; REQUIRE(RunInterp(ri, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{500});
+  }
+  CpuState d; d.rax = 0x4000000000000000ull; d.rbx = 4;
+  ExpectAgree(CompareX86(rr, d, {}, kMulMask), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, DivQuotientAndRemainder) {
+  const std::vector<std::uint8_t> code = {0x48, 0xF7, 0xF3};  // div rbx
+  {  // 100 / 7 = 14 rem 2
+    CpuState s; s.rax = 100; s.rdx = 0; s.rbx = 7;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{14});
+    CHECK_EQ(s.rdx, std::uint64_t{2});
+  }
+  CpuState d; d.rax = 100; d.rdx = 0; d.rbx = 7;
+  ExpectAgree(CompareX86(code, d, {}, kDivMask), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, IdivSignsAndRemainder) {
+  const std::vector<std::uint8_t> code = {0x48, 0xF7, 0xFB};  // idiv rbx
+  {  // -20 / 7 = -2 rem -6
+    CpuState s; s.rax = static_cast<std::uint64_t>(-20); s.rdx = ~0ull;
+    s.rbx = 7;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, static_cast<std::uint64_t>(-2));
+    CHECK_EQ(s.rdx, static_cast<std::uint64_t>(-6));
+  }
+  {  // 20 / -7 = -2 rem 6 (remainder follows the dividend)
+    CpuState s; s.rax = 20; s.rdx = 0; s.rbx = static_cast<std::uint64_t>(-7);
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, static_cast<std::uint64_t>(-2));
+    CHECK_EQ(s.rdx, std::uint64_t{6});
+  }
+  CpuState d; d.rax = static_cast<std::uint64_t>(-20); d.rdx = ~0ull; d.rbx = 7;
+  ExpectAgree(CompareX86(code, d, {}, kDivMask), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith, DivideFaults) {
+  // Divide by zero and quotient overflow must FAULT with kDivideError, never
+  // produce a value.
+  const std::vector<std::uint8_t> dv = {0x48, 0xF7, 0xF3};  // div rbx
+  {  // divide by zero
+    CpuState s; s.rax = 1; s.rdx = 0; s.rbx = 0;
+    ExecutionResult r; REQUIRE(RunInterp(dv, &s, &r));
+    CHECK(Faulted(r));
+    CHECK_EQ(s.rax, std::uint64_t{1});  // no partial commit
+    CHECK_EQ(s.rdx, std::uint64_t{0});
+  }
+  {  // quotient overflow: (1<<64 | max) / 1 does not fit 64 bits
+    CpuState s; s.rax = ~0ull; s.rdx = 1; s.rbx = 1;
+    ExecutionResult r; REQUIRE(RunInterp(dv, &s, &r));
+    CHECK(Faulted(r));
+  }
+  {  // 32-bit IDIV min/-1 overflow: F7 FB (idiv ebx)
+    const std::vector<std::uint8_t> idv = {0xF7, 0xFB};
+    CpuState s; s.rax = 0x80000000ull; s.rdx = 0xFFFFFFFFull; s.rbx = 0xFFFFFFFFull;
+    ExecutionResult r; REQUIRE(RunInterp(idv, &s, &r));
+    CHECK(Faulted(r));
+  }
+  // Differential: a divide-by-zero fault agrees across both backends.
+  CpuState d; d.rax = 1; d.rdx = 0; d.rbx = 0;
+  ExpectAgree(CompareX86(dv, d, {}, kDivMask), __FILE__, __LINE__);
+}
+
+// Negative proof: the fault must NOT have committed quotient/remainder, and a
+// divide-by-zero must not be treated as success.
+P5EMU_TEST(CpuArithNegative, DivideFaultCommitsNothing) {
+  const std::vector<std::uint8_t> dv = {0x48, 0xF7, 0xF3};
+  CpuState s;
+  s.rax = 0x123456789ABCDEFull;
+  s.rdx = 0xFDEEull;
+  s.rbx = 0;  // fault
+  ExecutionResult r;
+  REQUIRE(RunInterp(dv, &s, &r));
+  CHECK(Faulted(r));
+  // RAX and RDX are exactly as they were before the instruction.
+  CHECK_EQ(s.rax, std::uint64_t{0x123456789ABCDEFull});
+  CHECK_EQ(s.rdx, std::uint64_t{0xFDEEull});
+}
+
+P5EMU_TEST(CpuArithProperty, RandomDifferentialCampaign) {
+  std::uint64_t rng = 0x1234ABCD5678EF90ull;
+  const auto next = [&]() {
+    rng ^= rng >> 12; rng ^= rng << 25; rng ^= rng >> 27;
+    return rng * 0x2545F4914F6CDD1Dull;
+  };
+  const std::vector<std::vector<std::uint8_t>> adc = {{0x48,0x11,0xD8},{0x11,0xD8},{0x66,0x11,0xD8}};
+  const std::vector<std::vector<std::uint8_t>> sbb = {{0x48,0x19,0xD8},{0x19,0xD8}};
+  const std::vector<std::vector<std::uint8_t>> mul = {{0x48,0xF7,0xE3},{0xF7,0xE3}};
+  const std::vector<std::vector<std::uint8_t>> div = {{0x48,0xF7,0xF3}};
+  int cases = 0;
+  for (int i = 0; i < 40; ++i) {
+    // ADC / SBB across widths and carry states.
+    for (const auto& c : adc) {
+      CpuState d; d.rax = next(); d.rbx = next();
+      d.eflags = (next() & 1) ? eflags::kCf : 0;
+      ExpectAgree(CompareX86(c, d), __FILE__, __LINE__); ++cases;
+    }
+    for (const auto& c : sbb) {
+      CpuState d; d.rax = next(); d.rbx = next();
+      d.eflags = (next() & 1) ? eflags::kCf : 0;
+      ExpectAgree(CompareX86(c, d), __FILE__, __LINE__); ++cases;
+    }
+    // MUL across widths.
+    for (const auto& c : mul) {
+      CpuState d; d.rax = next(); d.rbx = next();
+      ExpectAgree(CompareX86(c, d, {}, kMulMask), __FILE__, __LINE__); ++cases;
+    }
+    // DIV with a non-zero divisor (result cases only; faults are covered above).
+    for (const auto& c : div) {
+      CpuState d; d.rax = next(); d.rdx = 0; d.rbx = next() | 1;
+      // keep the quotient in range: hi = 0 and rax < divisor*... (rdx=0 makes it safe)
+      ExpectAgree(CompareX86(c, d, {}, kDivMask), __FILE__, __LINE__); ++cases;
+    }
+  }
+  CHECK(cases >= 200);
+}
+
+// ===========================================================================
+// Phase 12: high-byte registers, 8-bit multiply/divide, accumulator-immediate
+// ADC/SBB, and 16-bit / memory-source PUSH/POP.
+// ===========================================================================
+
+P5EMU_TEST(CpuHighByte, MovAhBlAndLowByte) {
+  // mov ah, bl (88 DC): bits 8..15 of RAX take BL; the rest of RAX is preserved.
+  const std::vector<std::uint8_t> code = {0x88, 0xDC};
+  CpuState s;
+  s.rax = 0x1122334455667788ull;
+  s.rbx = 0x00000000000000ABull;  // BL = 0xAB
+  ExecutionResult r;
+  REQUIRE(RunInterp(code, &s, &r));
+  CHECK_EQ(s.rax, std::uint64_t{0x112233445566AB88ull});
+  CpuState d; d.rax = 0x1122334455667788ull; d.rbx = 0xAB;
+  ExpectAgree(CompareX86(code, d), __FILE__, __LINE__);
+
+  // mov al, ah (88 E0): AL = AH.
+  const std::vector<std::uint8_t> code2 = {0x88, 0xE0};
+  CpuState s2; s2.rax = 0x0000000000001234ull;  // AH = 0x12
+  ExecutionResult r2; REQUIRE(RunInterp(code2, &s2, &r2));
+  CHECK_EQ(s2.rax, std::uint64_t{0x0000000000001212ull});
+  CpuState d2; d2.rax = 0x0000000000001234ull;
+  ExpectAgree(CompareX86(code2, d2), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArith8, MulDiv8Bit) {
+  // mul bl (F6 E3): AX = AL * BL.
+  {  // 5 * 10 = 50 -> AL=0x32, AH=0
+    const std::vector<std::uint8_t> code = {0xF6, 0xE3};
+    CpuState s; s.rax = 5; s.rbx = 10;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFFFull, std::uint64_t{0x0032});
+    CHECK((s.eflags & eflags::kCf) == 0);
+    CpuState d; d.rax = 5; d.rbx = 10;
+    ExpectAgree(CompareX86(code, d, {}, kMulMask), __FILE__, __LINE__);
+  }
+  {  // 0x80 * 2 = 0x100 -> AL=0, AH=1, CF=OF=1
+    const std::vector<std::uint8_t> code = {0xF6, 0xE3};
+    CpuState s; s.rax = 0x80; s.rbx = 2;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFFFull, std::uint64_t{0x0100});
+    CHECK((s.eflags & eflags::kCf) != 0);
+  }
+  // imul bl (F6 EB): signed.
+  {
+    const std::vector<std::uint8_t> code = {0xF6, 0xEB};
+    CpuState s; s.rax = static_cast<std::uint64_t>(0xFD);  // AL = -3
+    s.rbx = 5;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFFFull, std::uint64_t{0xFFF1});  // -15
+    CHECK((s.eflags & eflags::kCf) == 0);
+    CpuState d; d.rax = 0xFD; d.rbx = 5;
+    ExpectAgree(CompareX86(code, d, {}, kMulMask), __FILE__, __LINE__);
+  }
+  // div bl (F6 F3): AX / BL -> AL quotient, AH remainder.
+  {
+    const std::vector<std::uint8_t> code = {0xF6, 0xF3};
+    CpuState s; s.rax = 100; s.rbx = 7;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFFFull, std::uint64_t{0x020E});  // AH=2, AL=14
+    CpuState d; d.rax = 100; d.rbx = 7;
+    ExpectAgree(CompareX86(code, d, {}, kDivMask), __FILE__, __LINE__);
+  }
+  // idiv bl (F6 FB): -20 / 7 -> AL=-2, AH=-6.
+  {
+    const std::vector<std::uint8_t> code = {0xF6, 0xFB};
+    CpuState s; s.rax = 0xFFEC;  // AX = -20
+    s.rbx = 7;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFFFull, std::uint64_t{0xFAFE});  // AH=0xFA, AL=0xFE
+    CpuState d; d.rax = 0xFFEC; d.rbx = 7;
+    ExpectAgree(CompareX86(code, d, {}, kDivMask), __FILE__, __LINE__);
+  }
+}
+
+P5EMU_TEST(CpuArith8, Div8BitFaults) {
+  // div bl with BL=0 faults and commits nothing.
+  const std::vector<std::uint8_t> code = {0xF6, 0xF3};
+  CpuState s; s.rax = 0x1234; s.rbx = 0;
+  ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+  CHECK(Faulted(r));
+  CHECK_EQ(s.rax, std::uint64_t{0x1234});  // unchanged
+  // Quotient overflow: AX=0x0200, BL=1 -> 512 does not fit in AL.
+  CpuState s2; s2.rax = 0x0200; s2.rbx = 1;
+  ExecutionResult r2; REQUIRE(RunInterp(code, &s2, &r2));
+  CHECK(Faulted(r2));
+  ExpectAgree(CompareX86(code, s, {}, kDivMask), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuArithAccum, AdcSbbAccumulatorImmediate) {
+  // adc al, 5 (14 05)
+  {
+    const std::vector<std::uint8_t> code = {0x14, 0x05};
+    CpuState s; s.rax = 10; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFull, std::uint64_t{16});
+    CpuState d; d.rax = 10; d.eflags = eflags::kCf;
+    ExpectAgree(CompareX86(code, d), __FILE__, __LINE__);
+  }
+  // adc eax, 0x100 (15 00 01 00 00), CF=1, EAX=~0 -> 0x00000100 (zero-extended)
+  {
+    const std::vector<std::uint8_t> code = {0x15, 0x00, 0x01, 0x00, 0x00};
+    CpuState s; s.rax = 0xFFFFFFFFull; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax, std::uint64_t{0x100});
+    CHECK((s.eflags & eflags::kCf) != 0);
+    CpuState d; d.rax = 0xFFFFFFFFull; d.eflags = eflags::kCf;
+    ExpectAgree(CompareX86(code, d), __FILE__, __LINE__);
+  }
+  // sbb al, 3 (1C 03) with CF=1: 10-3-1=6
+  {
+    const std::vector<std::uint8_t> code = {0x1C, 0x03};
+    CpuState s; s.rax = 10; s.eflags = eflags::kCf;
+    ExecutionResult r; REQUIRE(RunInterp(code, &s, &r));
+    CHECK_EQ(s.rax & 0xFFull, std::uint64_t{6});
+    CpuState d; d.rax = 10; d.eflags = eflags::kCf;
+    ExpectAgree(CompareX86(code, d), __FILE__, __LINE__);
+  }
+}
+
+P5EMU_TEST(CpuPushPop16, SixteenBitForms) {
+  // 66 50 push ax ; 66 5B pop bx
+  const std::vector<std::uint8_t> code = {0x66, 0x50, 0x66, 0x5B};
+  CpuState s;
+  s.rax = 0x1122334455667788ull;  // AX = 0x7788
+  s.rsp = kMemBase + 0x800;
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, {}, &img));
+  CHECK_EQ(s.rbx & 0xFFFFull, std::uint64_t{0x7788});
+  CHECK_EQ(s.rsp, std::uint64_t{kMemBase + 0x800});  // +2 then -2
+  // Pushed at the new rsp = old - 2.
+  CHECK_EQ(static_cast<std::uint64_t>(img[0x7FE]) |
+               (static_cast<std::uint64_t>(img[0x7FF]) << 8),
+           std::uint64_t{0x7788});
+  CpuState d;
+  d.rax = 0x1122334455667788ull;
+  d.rsp = kMemBase + 0x800;
+  ExpectAgree(CompareX86(code, d, {{kMemBase + 0x7FE, 2}}), __FILE__, __LINE__);
+}
+
+P5EMU_TEST(CpuPushPopMem, MemorySourceAndDestination) {
+  // push qword [rax] (FF 30) ; pop qword [rbx] (8F 03)
+  const std::vector<std::uint8_t> code = {0xFF, 0x30, 0x8F, 0x03};
+  const std::uint64_t src = kMemBase + 0x40;
+  const std::uint64_t dst = kMemBase + 0x80;
+  const std::uint64_t value = 0xDEADBEEFCAFEF00Dull;
+  std::vector<std::uint8_t> seed(kMemSize, 0);
+  for (int i = 0; i < 8; ++i) {
+    seed[0x40 + static_cast<std::size_t>(i)] =
+        static_cast<std::uint8_t>((value >> (8 * i)) & 0xFFu);
+  }
+  CpuState s;
+  s.rax = src;
+  s.rbx = dst;
+  s.rsp = kMemBase + 0x800;
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, seed, &img));
+  // [dst] now holds the value that was pushed from [src]; RSP is restored.
+  CHECK_EQ(ReadLe64(img, 0x80), value);
+  CHECK_EQ(s.rsp, std::uint64_t{kMemBase + 0x800});
+  CpuState d;
+  d.rax = src;
+  d.rbx = dst;
+  d.rsp = kMemBase + 0x800;
+  ExpectAgree(CompareX86(code, d, {{dst, 8}}, eflags::kAllMask, seed), __FILE__,
+              __LINE__);
+}
+
+// Negative proof: POP r/m with a memory destination that uses RSP must compute
+// the address from the OLD RSP, not the incremented one.
+P5EMU_TEST(CpuPushPopMem, PopMemoryAddressUsesOldRsp) {
+  // pop qword [rsp] (8F 04 24): stores the popped value at the OLD [rsp] and
+  // then RSP += 8.
+  const std::vector<std::uint8_t> code = {0x8F, 0x04, 0x24};
+  const std::uint64_t top = kMemBase + 0x800;
+  const std::uint64_t marker = 0x0011223344556677ull;
+  std::vector<std::uint8_t> seed(kMemSize, 0);
+  for (int i = 0; i < 8; ++i) {
+    seed[0x800 + static_cast<std::size_t>(i)] =
+        static_cast<std::uint8_t>((marker >> (8 * i)) & 0xFFu);
+  }
+  CpuState s;
+  s.rsp = top;
+  std::vector<std::uint8_t> img;
+  REQUIRE(RunAndCapture(code, &s, seed, &img));
+  // The value read from [old rsp] is written back to [old rsp]; RSP advances.
+  CHECK_EQ(ReadLe64(img, 0x800), marker);
+  CHECK_EQ(s.rsp, top + 8);
+  CpuState d;
+  d.rsp = top;
+  ExpectAgree(CompareX86(code, d, {{top, 8}}, eflags::kAllMask, seed), __FILE__,
+              __LINE__);
+}

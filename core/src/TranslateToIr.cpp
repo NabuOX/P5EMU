@@ -46,24 +46,18 @@ std::uint8_t NormWidth(std::uint32_t width_bytes) {
              : 8u;
 }
 
-// AH/BH/CH/DH are NOT modelled.
-//
-// Without a REX prefix, 8-bit register numbers 4..7 encode the HIGH bytes
-// AH/CH/DH/BH, which alias bits 8-15 of RAX/RBX/RCX/RDX. The IR's register model
-// only has low-byte views, so those registers are not representable. A naive
-// decoder names them "spl/bpl/sil/dil" and would silently read/write the WRONG
-// register. This rejects them explicitly instead.
-//
-// With a REX prefix, 4..7 are the low bytes SPL/BPL/SIL/DIL, which ARE the low
-// byte of RSP/RBP/RSI/RDI and so are representable and supported.
-bool UsesHighByteRegister(const x64::Instruction& insn) {
-  if (insn.has_rex) {
-    return false;
+// Maps a high-byte register number (4..7) to its IR register (AH/CH/DH/BH). The
+// decoder marks an operand `high_byte` when it is an 8-bit register 4..7 with no
+// REX prefix. With a REX prefix, 4..7 are SPL/BPL/SIL/DIL and are mapped by
+// ToArchRegister as usual.
+ArchRegister HighByteArchRegister(std::uint8_t reg) {
+  switch (reg) {
+    case 4: return ArchRegister::kAh;
+    case 5: return ArchRegister::kCh;
+    case 6: return ArchRegister::kDh;
+    case 7: return ArchRegister::kBh;
+    default: return ArchRegister::kInvalid;
   }
-  const auto is_high_byte = [](const Operand& o) {
-    return o.cls == OpClass::kReg8 && o.reg >= 4 && o.reg <= 7;
-  };
-  return is_high_byte(insn.dst) || is_high_byte(insn.src);
 }
 
 // Computes the effective address of a memory operand as an SSA value.
@@ -133,11 +127,12 @@ Status ReadOperand(const Operand& op, std::uint32_t width_bytes,
   switch (op.cls) {
     case OpClass::kReg64:
     case OpClass::kReg8: {
-      const ArchRegister r = ToArchRegister(op.reg);
+      const ArchRegister r =
+          op.high_byte ? HighByteArchRegister(op.reg) : ToArchRegister(op.reg);
       if (r == ArchRegister::kInvalid) {
         return StatusCode::kDecodeError;
       }
-      *value_out = b->EmitGetReg(r, NormWidth(width_bytes));
+      *value_out = b->EmitGetReg(r, op.high_byte ? 1 : NormWidth(width_bytes));
       *type_out = ir::ValueType::kI64;
       return StatusCode::kOk;
     }
@@ -172,12 +167,13 @@ Status WriteOperand(const Operand& op, std::uint32_t width_bytes,
   switch (op.cls) {
     case OpClass::kReg64:
     case OpClass::kReg8: {
-      const ArchRegister r = ToArchRegister(op.reg);
+      const ArchRegister r =
+          op.high_byte ? HighByteArchRegister(op.reg) : ToArchRegister(op.reg);
       if (r == ArchRegister::kInvalid) {
         return StatusCode::kDecodeError;
       }
       // EAX/RAX are kReg64 plus a width; the width carries the rule.
-      b->EmitSetReg(r, value, NormWidth(width_bytes));
+      b->EmitSetReg(r, value, op.high_byte ? 1 : NormWidth(width_bytes));
       return StatusCode::kOk;
     }
     case OpClass::kMem8:
@@ -212,13 +208,6 @@ Status TranslateToIr(const x64::Instruction& insn, Builder* builder) {
   }
   Builder& b = *builder;
   const memory::GuestAddr next_address = insn.address + insn.length;
-
-  // AH/BH/CH/DH are outside the register model (see UsesHighByteRegister). Reject
-  // them here, before any operand is read, rather than silently decoding them as
-  // the low-byte registers spl/bpl/sil/dil.
-  if (UsesHighByteRegister(insn)) {
-    return StatusCode::kUnimplementedInstruction;
-  }
 
   switch (insn.mnemonic) {
     // ---- MOV ---------------------------------------------------------------
@@ -350,6 +339,110 @@ Status TranslateToIr(const x64::Instruction& insn, Builder* builder) {
       return WriteOperand(insn.dst, insn.op_size, result, &b);
     }
 
+    // ---- ADC / SBB: ALU with an explicit carry-in --------------------------
+    case Mnemonic::kAdc:
+    case Mnemonic::kSbb: {
+      ir::ValueType tl{};
+      ir::ValueType tr{};
+      ValueId lhs = ir::kInvalidValue;
+      ValueId rhs = ir::kInvalidValue;
+      const Status rd = ReadOperand(insn.dst, insn.op_size, &tl, &lhs, &b);
+      if (!rd.ok()) return rd;
+      if (insn.src.cls == OpClass::kNone) {
+        rhs = b.EmitMaterializeConstant(insn.imm, ir::ValueType::kI64);
+      } else {
+        const Status rs = ReadOperand(insn.src, insn.op_size, &tr, &rhs, &b);
+        if (!rs.ok()) return rs;
+      }
+      // The carry/borrow-in is x86 CF, read as a 0/1 value.
+      const ValueId fl = b.EmitLoadFlags();
+      const ValueId carry = b.EmitTestCc(ir::ConditionCode::kB, fl);
+      const ValueId result =
+          (insn.mnemonic == Mnemonic::kAdc)
+              ? b.EmitAdcFlags(lhs, rhs, carry, insn.op_size)
+              : b.EmitSbbFlags(lhs, rhs, carry, insn.op_size);
+      if (result == ir::kInvalidValue) {
+        return StatusCode::kInternal;
+      }
+      return WriteOperand(insn.dst, insn.op_size, result, &b);
+    }
+
+    // ---- MUL / IMUL --------------------------------------------------------
+    case Mnemonic::kMul:
+    case Mnemonic::kIMul: {
+      if (insn.form == Form::kIMulRR || insn.form == Form::kIMulRRI) {
+        // Two-operand / immediate IMUL: the flags come from the full signed
+        // product and the low half is written to the destination. For the
+        // two-operand form dst = dst * src; for the immediate form the
+        // multiplicands are the SOURCE and the IMMEDIATE (dst is only the
+        // destination): Intel SDM Vol. 2 "IMUL r32, r/m32, imm32".
+        ir::ValueType ta{};
+        ir::ValueType ts{};
+        ValueId a = ir::kInvalidValue;
+        ValueId s = ir::kInvalidValue;
+        if (insn.form == Form::kIMulRR) {
+          const Status ra = ReadOperand(insn.dst, insn.op_size, &ta, &a, &b);
+          if (!ra.ok()) return ra;
+          const Status rs = ReadOperand(insn.src, insn.op_size, &ts, &s, &b);
+          if (!rs.ok()) return rs;
+        } else {
+          const Status rs = ReadOperand(insn.src, insn.op_size, &ts, &a, &b);
+          if (!rs.ok()) return rs;
+          s = b.EmitMaterializeConstant(insn.imm, ir::ValueType::kI64);
+        }
+        const ValueId lo = b.EmitIMulFlags(a, s, nullptr, insn.op_size);
+        if (lo == ir::kInvalidValue) return StatusCode::kInternal;
+        return WriteOperand(insn.dst, insn.op_size, lo, &b);
+      }
+      // One-operand implicit form: RDX:RAX = RAX * r/m.
+      ir::ValueType tt{};
+      ValueId src = ir::kInvalidValue;
+      const Status rs = ReadOperand(insn.dst, insn.op_size, &tt, &src, &b);
+      if (!rs.ok()) return rs;
+      const ValueId acc = b.EmitGetReg(ArchRegister::kRax, insn.op_size);
+      ValueId hi = ir::kInvalidValue;
+      const ValueId lo =
+          (insn.mnemonic == Mnemonic::kMul)
+              ? b.EmitMulFlags(acc, src, &hi, insn.op_size)
+              : b.EmitIMulFlags(acc, src, &hi, insn.op_size);
+      if (lo == ir::kInvalidValue) return StatusCode::kInternal;
+      b.EmitSetReg(ArchRegister::kRax, lo, insn.op_size);
+      if (insn.op_size == 1) {
+        b.EmitSetReg(ArchRegister::kAh, hi, 1);  // 8-bit high result is AH
+      } else {
+        b.EmitSetReg(ArchRegister::kRdx, hi, insn.op_size);
+      }
+      return StatusCode::kOk;
+    }
+
+    // ---- DIV / IDIV --------------------------------------------------------
+    case Mnemonic::kDiv:
+    case Mnemonic::kIDiv: {
+      ir::ValueType tt{};
+      ValueId divisor = ir::kInvalidValue;
+      const Status rs = ReadOperand(insn.dst, insn.op_size, &tt, &divisor, &b);
+      if (!rs.ok()) return rs;
+      const ValueId lo = b.EmitGetReg(ArchRegister::kRax, insn.op_size);
+      const ValueId hi = (insn.op_size == 1)
+                             ? b.EmitGetReg(ArchRegister::kAh, 1)
+                             : b.EmitGetReg(ArchRegister::kRdx, insn.op_size);
+      ValueId rem = ir::kInvalidValue;
+      const ValueId quot =
+          (insn.mnemonic == Mnemonic::kDiv)
+              ? b.EmitDiv(hi, lo, divisor, &rem, insn.op_size)
+              : b.EmitIDiv(hi, lo, divisor, &rem, insn.op_size);
+      if (quot == ir::kInvalidValue) return StatusCode::kInternal;
+      // These run only if the divide did NOT fault: on a #DE the interpreter and
+      // backend halt before committing, so RAX/RDX are left untouched.
+      b.EmitSetReg(ArchRegister::kRax, quot, insn.op_size);
+      if (insn.op_size == 1) {
+        b.EmitSetReg(ArchRegister::kAh, rem, 1);  // 8-bit remainder is AH
+      } else {
+        b.EmitSetReg(ArchRegister::kRdx, rem, insn.op_size);
+      }
+      return StatusCode::kOk;
+    }
+
     // ---- CMP / TEST: flags only --------------------------------------------
     case Mnemonic::kCmp: {
       ir::ValueType tl{};
@@ -466,6 +559,67 @@ Status TranslateToIr(const x64::Instruction& insn, Builder* builder) {
       b.EmitSetReg(ArchRegister::kRsp, new_sp);
       b.EmitSetReg(ArchRegister::kRip, target);
       b.EmitIndirectJump(target);
+      return StatusCode::kOk;
+    }
+
+    case Mnemonic::kPush: {
+      // PUSH value: RSP -= width; [RSP] = value. Intel SDM Vol. 2 §2.2.1.
+      // The store is emitted BEFORE the RSP write, so a guest-memory fault leaves
+      // RSP unmodified (atomic-on-fault), consistent with CALL/RET.
+      const std::uint64_t w = insn.op_size;  // 2 or 8
+      ir::ValueType t{};
+      ValueId value = ir::kInvalidValue;
+      if (insn.form == Form::kPushImm) {
+        value = b.EmitMaterializeConstant(insn.imm, ir::ValueType::kI64);
+      } else {
+        const Status rd =
+            ReadOperand(insn.dst, static_cast<std::uint32_t>(w), &t, &value, &b);
+        if (!rd.ok()) return rd;
+      }
+      if (value == ir::kInvalidValue) {
+        return StatusCode::kInternal;
+      }
+      const ValueId sp = b.EmitGetReg(ArchRegister::kRsp);
+      const ValueId new_sp =
+          b.EmitBinary(OpKind::kSub, sp,
+                       b.EmitMaterializeConstant(w, ir::ValueType::kI64));
+      b.EmitStore(new_sp, value, static_cast<std::uint32_t>(w));
+      b.EmitSetReg(ArchRegister::kRsp, new_sp);
+      return StatusCode::kOk;
+    }
+    case Mnemonic::kPop: {
+      // POP r/m: dst = [RSP]; RSP += width. Intel SDM Vol. 2 §2.2.1.
+      // The destination is written BEFORE the RSP update, so a memory source
+      // address that uses RSP is computed with the OLD RSP. If the destination
+      // is RSP itself, the loaded value wins (architecturally ESP is incremented
+      // before the old top is written, but the write to the destination then
+      // overwrites the increment).
+      const std::uint64_t w = insn.op_size;
+      const bool dst_is_rsp =
+          (insn.dst.cls == OpClass::kReg64 && insn.dst.reg == 4u);
+      const ValueId sp = b.EmitGetReg(ArchRegister::kRsp);
+      const ValueId value = b.EmitLoad(sp, static_cast<std::uint32_t>(w));
+      const Status wr = WriteOperand(insn.dst, static_cast<std::uint32_t>(w),
+                                     value, &b);
+      if (!wr.ok()) return wr;
+      if (!dst_is_rsp) {
+        const ValueId new_sp =
+            b.EmitBinary(OpKind::kAdd, sp,
+                         b.EmitMaterializeConstant(w, ir::ValueType::kI64));
+        b.EmitSetReg(ArchRegister::kRsp, new_sp);
+      }
+      return StatusCode::kOk;
+    }
+    case Mnemonic::kLeave: {
+      // LEAVE: RSP := RBP; RBP := POP(). The pop reads [RBP] and the stack moves
+      // to RBP+8. The load is emitted first, so a fault leaves both registers
+      // unmodified (atomic-on-fault). Intel SDM Vol. 2 §2.2.1.
+      const ValueId bp = b.EmitGetReg(ArchRegister::kRbp);
+      const ValueId value = b.EmitLoad(bp, 8);
+      const ValueId new_sp = b.EmitBinary(
+          OpKind::kAdd, bp, b.EmitMaterializeConstant(8, ir::ValueType::kI64));
+      b.EmitSetReg(ArchRegister::kRsp, new_sp);
+      b.EmitSetReg(ArchRegister::kRbp, value);
       return StatusCode::kOk;
     }
 

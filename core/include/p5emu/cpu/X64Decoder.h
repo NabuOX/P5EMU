@@ -104,6 +104,9 @@ struct Operand {
 
   // Register operand.
   std::uint8_t reg = 0;
+  // Set for an 8-bit register number 4..7 with NO REX prefix: those encode the
+  // high-byte registers AH/CH/DH/BH, not spl/bpl/sil/dil. Phase 12.
+  bool high_byte = false;
 
   // Memory operand: base + index*scale + displacement.
   bool has_base = false;
@@ -154,6 +157,19 @@ enum class Mnemonic : std::uint16_t {
   kNop,
 
   kInt3,      // decodes, and is translated to an IR trap
+
+  // Phase 11: stack family (operand forms supported by the current IR only).
+  kPush,      // PUSH r64 / PUSH imm8 / PUSH imm32
+  kPop,       // POP r64
+  kLeave,     // LEAVE (RSP := RBP; RBP := pop)
+
+  // Phase 11: arithmetic families.
+  kAdc,       // add with carry
+  kSbb,       // subtract with borrow
+  kMul,       // unsigned multiply (implicit RAX/RDX)
+  kIMul,      // signed multiply (one-/two-operand/immediate)
+  kDiv,       // unsigned divide (implicit RAX/RDX, #DE)
+  kIDiv,      // signed divide (implicit RAX/RDX, #DE)
 };
 
 const char* MnemonicName(Mnemonic m) noexcept;
@@ -205,6 +221,22 @@ enum class Form : std::uint8_t {
   kRetn,
   kNop,
   kInt3,
+
+  // Phase 11 stack forms. Only the 64-bit register/immediate forms are in the
+  // supported set; 16-bit operand-size and memory-source forms are reported
+  // unimplemented rather than approximated.
+  kPushR,      // PUSH r64
+  kPushImm,    // PUSH imm8/imm32 (sign-extended to 64)
+  kPopR,       // POP r64
+  kLeave,      // LEAVE
+
+  // Phase 11 arithmetic forms.
+  kMulRm,      // MUL r/m (implicit RAX/RDX)
+  kIMulRm,     // IMUL r/m (one-operand implicit form)
+  kDivRm,      // DIV r/m (implicit RAX/RDX)
+  kIDivRm,     // IDIV r/m (implicit RAX/RDX)
+  kIMulRR,     // IMUL reg, r/m   (0F AF)
+  kIMulRRI,    // IMUL reg, r/m, imm  (69 / 6B)
 };
 
 const char* FormName(Form f) noexcept;

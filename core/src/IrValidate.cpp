@@ -125,6 +125,12 @@ ValueType InferType(const Program& program, ValueId v,
     case OpKind::kExtend:
     case OpKind::kTruncate:
     case OpKind::kAddrCalc:
+    case OpKind::kAdcFlags:
+    case OpKind::kSbbFlags:
+    case OpKind::kMulFlags:
+    case OpKind::kIMulFlags:
+    case OpKind::kDivFlags:
+    case OpKind::kIDivFlags:
       return ValueType::kI64;
     case OpKind::kTestCc:
       return ValueType::kI8;
@@ -144,7 +150,13 @@ bool IsValidArchRegister(ArchRegister r) {
   if (r == ArchRegister::kInvalid || r == ArchRegister::kInvalidSentinel) {
     return false;
   }
-  return r >= ArchRegister::kRax && r <= ArchRegister::kEflags;
+  return r >= ArchRegister::kRax && r <= ArchRegister::kBh;
+}
+
+// AH/CH/DH/BH are 8-bit-only views of bits 8..15 of RAX/RCX/RDX/RBX.
+bool IsHighByteRegister(ArchRegister r) {
+  return r == ArchRegister::kAh || r == ArchRegister::kCh ||
+         r == ArchRegister::kDh || r == ArchRegister::kBh;
 }
 
 // Expected OPERAND (value) roles per op, in order.
@@ -202,6 +214,23 @@ bool ExpectedOperands(OpKind kind, std::vector<OperandRole>* roles_out) {
     case OpKind::kShr:
     case OpKind::kSar:
       *roles_out = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kFlagsOut};
+      return true;
+    // Phase 11 arithmetic.
+    case OpKind::kAdcFlags:
+    case OpKind::kSbbFlags:
+      // a, b, carry-in, flags-out
+      *roles_out = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kSrc3,
+                    OperandRole::kFlagsOut};
+      return true;
+    case OpKind::kMulFlags:
+    case OpKind::kIMulFlags:
+      // a, b, flags-out
+      *roles_out = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kFlagsOut};
+      return true;
+    case OpKind::kDivFlags:
+    case OpKind::kIDivFlags:
+      // dividend_hi, dividend_lo, divisor
+      *roles_out = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kSrc3};
       return true;
     case OpKind::kInvalid:
       return false;
@@ -306,6 +335,9 @@ Status ValidateIrDetailed(const Program& program, ValidationReport* report) {
       if (op.dest != kInvalidValue) {
         defined_here.push_back(op.dest);
       }
+      if (op.dest2 != kInvalidValue) {
+        defined_here.push_back(op.dest2);
+      }
       for (std::size_t a = 0; a < op.args.size() && a < op.roles.size(); ++a) {
         if (op.roles[a] == OperandRole::kFlagsOut) {
           defined_here.push_back(op.args[a]);
@@ -409,6 +441,13 @@ Status ValidateIrDetailed(const Program& program, ValidationReport* report) {
         return fail("invalid-register", block.id, op_index, op.dest,
                     std::string("invalid register ") + ArchRegisterName(op.reg));
       }
+      if ((op.kind == OpKind::kGetReg || op.kind == OpKind::kSetReg) &&
+          IsHighByteRegister(op.reg) && op.width != 1) {
+        // AH/CH/DH/BH are byte-only views.
+        return fail("invalid-width", block.id, op_index, op.dest,
+                    std::string("high-byte register ") + ArchRegisterName(op.reg) +
+                        " requires an 8-bit width");
+      }
       if (op.kind == OpKind::kLoad || op.kind == OpKind::kStore) {
         if (!memory::IsValidAccessWidth(op.width)) {
           return fail("malformed-memory-op", block.id, op_index, op.dest,
@@ -419,6 +458,30 @@ Status ValidateIrDetailed(const Program& program, ValidationReport* report) {
       if (op.kind == OpKind::kTruncate && !memory::IsValidAccessWidth(op.width)) {
         return fail("invalid-width", block.id, op_index, op.dest,
                     "truncate width " + std::to_string(op.width) +
+                        " is not 1/2/4/8");
+      }
+      // Phase 11: dest2 is used only by the double-width multiply/divide ops, and
+      // those require it. Arithmetic ops carry an explicit operand width.
+      const bool new_arith =
+          (op.kind == OpKind::kAdcFlags || op.kind == OpKind::kSbbFlags ||
+           op.kind == OpKind::kMulFlags || op.kind == OpKind::kIMulFlags ||
+           op.kind == OpKind::kDivFlags || op.kind == OpKind::kIDivFlags);
+      const bool uses_dest2 =
+          (op.kind == OpKind::kMulFlags || op.kind == OpKind::kIMulFlags ||
+           op.kind == OpKind::kDivFlags || op.kind == OpKind::kIDivFlags);
+      if (uses_dest2 && op.dest2 == kInvalidValue) {
+        return fail("impossible-operand-count", block.id, op_index, op.dest,
+                    std::string(OpKindName(op.kind)) +
+                        " requires a second result (dest2)");
+      }
+      if (!uses_dest2 && op.dest2 != kInvalidValue) {
+        return fail("invalid-op", block.id, op_index, op.dest2,
+                    std::string(OpKindName(op.kind)) +
+                        " must not define a second result");
+      }
+      if (new_arith && !memory::IsValidAccessWidth(op.width)) {
+        return fail("invalid-width", block.id, op_index, op.dest,
+                    "arithmetic width " + std::to_string(op.width) +
                         " is not 1/2/4/8");
       }
       if (op.kind == OpKind::kExtend && !IsValidExtendMode(op.mode)) {
@@ -497,7 +560,7 @@ Status ValidateIrDetailed(const Program& program, ValidationReport* report) {
                         std::string("expected flags, got ") + TypeName(vt));
           }
         } else if (role == OperandRole::kAddr || role == OperandRole::kSrc ||
-                   role == OperandRole::kSrc2) {
+                   role == OperandRole::kSrc2 || role == OperandRole::kSrc3) {
           // Any SCALAR INTEGER type is acceptable where an integer is wanted.
           //
           // P5EMU stores every value in a 64-bit slot, so an i8 or i32 result

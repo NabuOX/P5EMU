@@ -97,6 +97,23 @@ inline std::uint32_t MaskShiftCount(std::uint64_t count,
                                                                    : 0x1fu));
 }
 
+// 128-bit helpers for the wide arithmetic families (Phase 11). Host is GCC/Clang
+// on x86-64, so 128-bit integers are available; the __extension__ typedefs keep
+// -pedantic quiet. Every signed edge case is handled explicitly so no host UB is
+// relied upon.
+__extension__ typedef unsigned __int128 u128;
+__extension__ typedef __int128 i128;
+
+// Sign-extends the low `total_bits` bits of a 128-bit value. Used by the wide
+// multiply/divide families. Host is GCC/Clang on x86-64, where i128 exists;
+// every signed edge case is handled explicitly so no host UB is relied upon.
+inline i128 SignExtend128(u128 v, std::uint32_t total_bits) {
+  if (total_bits == 0) return 0;
+  if (total_bits >= 128) return static_cast<i128>(v);
+  const std::uint32_t sh = 128u - total_bits;
+  return static_cast<i128>(v << sh) >> sh;
+}
+
 // Flags and result for a flag-producing arithmetic/logic op at a given operand
 // width. The operands are masked to the width FIRST, so every flag is defined at
 // bit (8*width - 1) rather than at bit 63. This is the whole reason the ops carry
@@ -106,7 +123,8 @@ inline std::uint32_t MaskShiftCount(std::uint64_t count,
 inline std::uint64_t ComputeArithFlags(OpKind kind, std::uint64_t a,
                                        std::uint64_t b,
                                        std::uint32_t width_bytes,
-                                       std::uint64_t* result_out) {
+                                       std::uint64_t* result_out,
+                                       std::uint64_t carry_in = 0) {
   const std::uint32_t bits = WidthBits(width_bytes);
   const std::uint64_t m = WidthMask(width_bytes);
   a &= m;
@@ -119,6 +137,31 @@ inline std::uint64_t ComputeArithFlags(OpKind kind, std::uint64_t a,
   };
 
   switch (kind) {
+    // ADC: DEST + SRC + CF. The carry-in is a full third operand, so the flags
+    // are computed from the true triple sum, never from a truncated a+b.
+    case OpKind::kAdcFlags: {
+      const u128 s =
+          static_cast<u128>(a) + b + carry_in;
+      r = static_cast<std::uint64_t>(s) & m;
+      if (((s >> bits) & 1u) != 0) f |= eflags::kCf;
+      const bool sa = sign_bit(a);
+      const bool sb = sign_bit(b);
+      const bool sr = sign_bit(r);
+      if (sa == sb && sr != sa) f |= eflags::kOf;
+      if (AuxCarryAdd(a, b, carry_in)) f |= eflags::kAf;
+      break;
+    }
+    // SBB: DEST - SRC - CF. The borrow-in is a full third operand.
+    case OpKind::kSbbFlags: {
+      r = (a - b - carry_in) & m;
+      if (a < b || (a == b && carry_in == 1)) f |= eflags::kCf;
+      const bool sa = sign_bit(a);
+      const bool sb = sign_bit(b);
+      const bool sr = sign_bit(r);
+      if (sa != sb && sr != sa) f |= eflags::kOf;
+      if (AuxCarrySub(a, b, carry_in)) f |= eflags::kAf;
+      break;
+    }
     case OpKind::kAddFlags: {
       r = (a + b) & m;
       // CF: carry out of bit (bits-1). For bits == 64 the sum wraps, so it is
@@ -261,6 +304,12 @@ inline void ComputeShift(OpKind kind, std::uint64_t value, std::uint64_t raw_cou
   *flags_out = f;
 }
 
+// AH/CH/DH/BH are byte views of bits 8..15 of RAX/RCX/RDX/RBX.
+inline bool IsHighByteRegister(ArchRegister r) noexcept {
+  return r == ArchRegister::kAh || r == ArchRegister::kCh ||
+         r == ArchRegister::kDh || r == ArchRegister::kBh;
+}
+
 std::uint64_t* RegisterSlot(CpuState* s, ArchRegister reg) {
   switch (reg) {
     case ArchRegister::kRax: return &s->rax;
@@ -281,6 +330,12 @@ std::uint64_t* RegisterSlot(CpuState* s, ArchRegister reg) {
     case ArchRegister::kR15: return &s->r15;
     case ArchRegister::kRip: return &s->rip;
     case ArchRegister::kEflags: return &s->eflags;
+    // High-byte views return the PARENT 64-bit slot; the get/set cases apply the
+    // bits 8..15 subset.
+    case ArchRegister::kAh: return &s->rax;
+    case ArchRegister::kCh: return &s->rcx;
+    case ArchRegister::kDh: return &s->rdx;
+    case ArchRegister::kBh: return &s->rbx;
     case ArchRegister::kInvalid:
     case ArchRegister::kInvalidSentinel:
       return nullptr;
@@ -382,6 +437,7 @@ const char* TerminationReasonName(TerminationReason reason) noexcept {
     case TerminationReason::kFault:       return "fault";
     case TerminationReason::kIrInvalid:   return "ir-invalid";
     case TerminationReason::kHleError:    return "hle-error";
+    case TerminationReason::kCpuFault:    return "cpu-fault";
   }
   return "unknown";
 }
@@ -461,23 +517,33 @@ ExecutionResult ReferenceInterpreter::Execute(const Program& program,
         case OpKind::kGetReg: {
           std::uint64_t* slot = RegisterSlot(state, op.reg);
           values.Ensure(op.dest, ValueType::kI64);
-          // A narrow read observes only the low bits (AL is RAX[7:0]).
+          // A narrow read observes only the low bits (AL is RAX[7:0]); a
+          // high-byte view observes bits 8..15.
           const std::uint64_t v = (slot != nullptr) ? *slot : 0u;
-          values.Set(op.dest, v & WidthMask(op.width));
+          if (IsHighByteRegister(op.reg)) {
+            values.Set(op.dest, (v >> 8) & 0xFFu);
+          } else {
+            values.Set(op.dest, v & WidthMask(op.width));
+          }
           break;
         }
         case OpKind::kSetReg: {
           std::uint64_t* slot = RegisterSlot(state, op.reg);
           if (slot != nullptr) {
             const std::uint64_t v = values.Get(op.args[0]);
-            const std::uint32_t w = NormWidth(op.width);
-            const std::uint64_t m = WidthMask(op.width);
-            if (w == 8) {
-              *slot = v;                       // RAX: replace all 64 bits
-            } else if (w == 4) {
-              *slot = v & 0xFFFFFFFFull;       // EAX: zero-extend into RAX
+            if (IsHighByteRegister(op.reg)) {
+              // AH/CH/DH/BH: replace bits 8..15, preserving all others.
+              *slot = (*slot & ~std::uint64_t{0xFF00u}) | ((v & 0xFFu) << 8);
             } else {
-              *slot = (*slot & ~m) | (v & m);  // AL/AX: preserve upper bits
+              const std::uint32_t w = NormWidth(op.width);
+              const std::uint64_t m = WidthMask(op.width);
+              if (w == 8) {
+                *slot = v;                       // RAX: replace all 64 bits
+              } else if (w == 4) {
+                *slot = v & 0xFFFFFFFFull;       // EAX: zero-extend into RAX
+              } else {
+                *slot = (*slot & ~m) | (v & m);  // AL/AX: preserve upper bits
+              }
             }
           }
           break;
@@ -552,6 +618,126 @@ ExecutionResult ReferenceInterpreter::Execute(const Program& program,
           values.Ensure(op.dest, ValueType::kI64);
           values.Set(op.dest, r);
           values.SetFlags(op.args[2], f);
+          break;
+        }
+
+        // ---- ADC / SBB (carry-in) ---------------------------------------
+        case OpKind::kAdcFlags:
+        case OpKind::kSbbFlags: {
+          std::uint64_t r = 0;
+          const std::uint64_t f =
+              ComputeArithFlags(op.kind, values.Get(op.args[0]),
+                                values.Get(op.args[1]), op.width, &r,
+                                values.Get(op.args[2]));
+          values.Ensure(op.dest, ValueType::kI64);
+          values.Set(op.dest, r);
+          values.SetFlags(op.args[3], f);
+          break;
+        }
+
+        // ---- MUL / IMUL (double-width product) --------------------------
+        case OpKind::kMulFlags:
+        case OpKind::kIMulFlags: {
+          const std::uint32_t bits = WidthBits(op.width);
+          const std::uint64_t m = WidthMask(op.width);
+          const std::uint64_t a = values.Get(op.args[0]) & m;
+          const std::uint64_t b = values.Get(op.args[1]) & m;
+          std::uint64_t lo = 0;
+          std::uint64_t hi = 0;
+          std::uint64_t f = 0;
+          if (op.kind == OpKind::kMulFlags) {
+            const u128 p = static_cast<u128>(a) * b;
+            lo = static_cast<std::uint64_t>(p) & m;
+            hi = static_cast<std::uint64_t>(p >> bits) & m;
+            if (hi != 0) f |= eflags::kCf | eflags::kOf;
+          } else {
+            const i128 p = SignExtend128(a, bits) * SignExtend128(b, bits);
+            lo = static_cast<std::uint64_t>(p) & m;
+            hi = static_cast<std::uint64_t>(p >> bits) & m;
+            if (p != SignExtend128(lo, bits)) f |= eflags::kCf | eflags::kOf;
+          }
+          values.Ensure(op.dest, ValueType::kI64);
+          values.Set(op.dest, lo);
+          if (op.dest2 != ir::kInvalidValue) {
+            values.Ensure(op.dest2, ValueType::kI64);
+            values.Set(op.dest2, hi);
+          }
+          values.SetFlags(op.args[2], f);
+          break;
+        }
+
+        // ---- DIV / IDIV (double-width dividend, divide fault) -----------
+        case OpKind::kDivFlags:
+        case OpKind::kIDivFlags: {
+          const std::uint32_t bits = WidthBits(op.width);
+          const std::uint64_t m = WidthMask(op.width);
+          const std::uint64_t hi = values.Get(op.args[0]) & m;
+          const std::uint64_t lo = values.Get(op.args[1]) & m;
+          const std::uint64_t dv = values.Get(op.args[2]) & m;
+          const u128 udiv =
+              (static_cast<u128>(hi) << bits) | lo;
+          std::uint64_t quot = 0;
+          std::uint64_t rem = 0;
+          bool fault = false;
+          if (op.kind == OpKind::kDivFlags) {
+            if (dv == 0) {
+              fault = true;
+            } else {
+              const u128 q = udiv / dv;
+              const u128 r = udiv % dv;
+              if (q > m) {
+                fault = true;  // quotient overflow (#DE)
+              } else {
+                quot = static_cast<std::uint64_t>(q) & m;
+                rem = static_cast<std::uint64_t>(r) & m;
+              }
+            }
+          } else {
+            const i128 dividend = SignExtend128(udiv, 2u * bits);
+            const i128 d = SignExtend128(dv, bits);
+            if (d == 0) {
+              fault = true;
+            } else {
+              i128 q = 0;
+              i128 r = 0;
+              if (d == -1) {
+                // -dividend is UB for the most-negative value; special-case it.
+                if (dividend == (static_cast<i128>(1) << 127)) {
+                  fault = true;
+                } else {
+                  q = -dividend;
+                  r = 0;
+                }
+              } else {
+                q = dividend / d;
+                r = dividend % d;
+              }
+              if (!fault) {
+                const i128 qmin = -(static_cast<i128>(1) << (bits - 1u));
+                const i128 qmax =
+                    (static_cast<i128>(1) << (bits - 1u)) - 1;
+                if (q < qmin || q > qmax) {
+                  fault = true;  // quotient overflow (#DE)
+                } else {
+                  quot = static_cast<std::uint64_t>(q) & m;
+                  rem = static_cast<std::uint64_t>(r) & m;
+                }
+              }
+            }
+          }
+          if (fault) {
+            // A divide error commits NOTHING: no quotient, no remainder.
+            result.status = StatusCode::kDivideError;
+            result.reason = TerminationReason::kCpuFault;
+            halted = true;
+            break;
+          }
+          values.Ensure(op.dest, ValueType::kI64);
+          values.Set(op.dest, quot);
+          if (op.dest2 != ir::kInvalidValue) {
+            values.Ensure(op.dest2, ValueType::kI64);
+            values.Set(op.dest2, rem);
+          }
           break;
         }
 

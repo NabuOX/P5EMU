@@ -24,6 +24,15 @@ StatusCode StatusCodeForFault(std::uint64_t fault_code) {
   }
 }
 
+// Maps a guest CPU fault kind to a Status. These MUST match the interpreter so
+// an interpreter/AArch64 differential comparison agrees on the fault.
+StatusCode StatusCodeForCpuFault(std::uint64_t code) {
+  switch (code) {
+    case P5EMU_A64_CPU_FAULT_DIVIDE: return StatusCode::kDivideError;
+    default: return StatusCode::kDivideError;
+  }
+}
+
 // Maps an HLE helper result code to a Status. These MUST match the host-side
 // HLE error model so an interpreter/AArch64 differential comparison agrees.
 StatusCode StatusCodeForHle(std::uint64_t code) {
@@ -200,6 +209,9 @@ ExecutionResult Arm64Backend::Execute(const ir::Program& program,
       break;
     case TerminationReason::kHleError:
       result.status = StatusCodeForHle(ctx.fault_code);
+      break;
+    case TerminationReason::kCpuFault:
+      result.status = StatusCodeForCpuFault(ctx.fault_code);
       break;
     case TerminationReason::kTrap:
       result.status = StatusCode::kUnimplementedInstruction;

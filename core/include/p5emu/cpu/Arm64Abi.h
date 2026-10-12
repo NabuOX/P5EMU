@@ -63,7 +63,8 @@ extern "C" {
 #define P5EMU_A64_CTX_FN_LOAD_OFFSET 176
 #define P5EMU_A64_CTX_FN_STORE_OFFSET 184
 #define P5EMU_A64_CTX_FN_HLE_OFFSET 192
-#define P5EMU_A64_CTX_SIZE 200
+#define P5EMU_A64_CTX_FN_ARITH_OFFSET 200 /* Phase 11 arithmetic helper */
+#define P5EMU_A64_CTX_SIZE 208
 
 /* Termination reasons. Values MUST equal p5emu::cpu::TerminationReason. */
 #define P5EMU_A64_REASON_RUNNING 0
@@ -75,6 +76,18 @@ extern "C" {
 #define P5EMU_A64_REASON_FAULT 6
 #define P5EMU_A64_REASON_IR_INVALID 7
 #define P5EMU_A64_REASON_HLE_ERROR 8
+#define P5EMU_A64_REASON_CPU_FAULT 9
+
+/* Guest CPU fault kinds (ctx.fault_code when status is CPU_FAULT). */
+#define P5EMU_A64_CPU_FAULT_DIVIDE 1
+
+/* Arithmetic helper op selectors (Phase 11). MUST match the harness + host. */
+#define P5EMU_A64_ARITH_ADC 0
+#define P5EMU_A64_ARITH_SBB 1
+#define P5EMU_A64_ARITH_MUL 2
+#define P5EMU_A64_ARITH_IMUL 3
+#define P5EMU_A64_ARITH_DIV 4
+#define P5EMU_A64_ARITH_IDIV 5
 
 /* HLE helper result codes. MUST match the host-side mapping. */
 #define P5EMU_A64_HLE_OK 0
@@ -113,6 +126,7 @@ typedef struct P5EmuArm64Ctx {
   uint64_t fn_load;                  /* +176  : helper function pointer */
   uint64_t fn_store;                 /* +184  : helper function pointer */
   uint64_t fn_hle;                   /* +192  : HLE dispatch helper pointer */
+  uint64_t fn_arith;                 /* +200  : arithmetic helper pointer */
 } P5EmuArm64Ctx;
 
 /* Memory helper signatures, expressed as the generated code calls them.
@@ -128,6 +142,23 @@ typedef uint64_t (*p5emu_a64_load_fn)(uint64_t mem_handle, uint64_t addr,
 typedef uint64_t (*p5emu_a64_store_fn)(uint64_t mem_handle, uint64_t addr,
                                        uint64_t width, uint64_t value,
                                        uint64_t* status_out);
+
+/* Arithmetic helper (Phase 11). Computes one x86 arithmetic operation with the
+ * correct result, flags, and divide-fault detection, so the interpreter and the
+ * AArch64 backend share ONE definition of the semantics.
+ *
+ *   arith(op, width, a, b, flags_in, out2*, flags_out*, fault_out*) -> result
+ *   x0=op x1=width x2=a x3=b x4=flags_in x5=&out2 x6=&flags_out x7=&fault_out
+ *
+ * Returns x0 = primary result (low half / quotient). On success writes the
+ * secondary result (high half / remainder) to *out2 and the new partial EFLAGS
+ * to *flags_out. On a fault it sets *fault_out to a P5EMU_A64_CPU_FAULT_* code
+ * and leaves *out2 and *flags_out untouched, so no partial result is committed.
+ */
+typedef uint64_t (*p5emu_a64_arith_fn)(uint64_t op, uint64_t width, uint64_t a,
+                                       uint64_t b, uint64_t flags_in,
+                                       uint64_t* out2, uint64_t* flags_out,
+                                       uint64_t* fault_out);
 
 /* The generated entry point's signature. */
 typedef uint64_t (*p5emu_a64_block_fn)(P5EmuArm64Ctx* ctx);

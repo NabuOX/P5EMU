@@ -218,6 +218,7 @@ boundary between public knowledge and prohibited material.
 | [`docs/architecture/relocations.md`](docs/architecture/relocations.md) | Relocations, load bias, import requirement model, resolver lifecycle |
 | [`docs/architecture/hle.md`](docs/architecture/hle.md) | HLE: identity, registry, guest ABI, dispatch, trampolines, reentrancy |
 | [`docs/architecture/runtime.md`](docs/architecture/runtime.md) | Runtime: address space, stack, process startup, module graph, load bias, resolution, multi-region transport |
+| [`docs/architecture/cpu.md`](docs/architecture/cpu.md) | CPU pipeline, supported instruction families/forms, stack family, deferred arithmetic families |
 | [`docs/development.md`](docs/development.md) | Development guide: environment, build, tests, sanitizers, AArch64/qemu, provenance |
 | [`docs/research/ps5-runtime-evidence.md`](docs/research/ps5-runtime-evidence.md) | PS5 startup/runtime evidence audit — the P5EMU-vs-PS5 boundary |
 | [`docs/research/ps5-runtime-phase8.md`](docs/research/ps5-runtime-phase8.md) | Phase 8 evidence ledger — per-fact PS5 runtime classification (known/UNKNOWN) |

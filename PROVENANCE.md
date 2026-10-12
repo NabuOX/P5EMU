@@ -90,6 +90,9 @@ architecture behaviour. No upstream source was copied.
 | Multi-region AArch64 transport (harness protocol v2) | 7 | Whole | Region table authored here; extends the Phase-2/3 protocol. Still test infrastructure |
 | Runtime profile / evidence boundary (`runtime::RuntimeProfile`) | 8 | Whole | Evidence classes, structured startup state, generic-vs-PS5 profile separation, module metadata. Authored here; treats PS5 runtime facts as documented-or-UNKNOWN. Ledger: `docs/research/ps5-runtime-phase8.md` |
 | Typed SCE dynamic metadata (`loader::SceMetadata`) | 9 | Whole | Tag number-vs-semantics knowledge, typed dynamic buckets, NID representation (no generation), opaque library identity. Authored here; Sony tag payloads stay UNKNOWN. Ledger: `docs/research/ps5-dynamic-linking-phase9.md` |
+| x86-64 stack family (`PUSH`/`POP`/`LEAVE`) + CPU architecture doc | 11 | Whole | Semantics from the Intel SDM Vol. 2 §2.2.1; lowered with existing IR ops; authored here. See `docs/architecture/cpu.md` |
+| x86-64 ADC/SBB/MUL/IMUL/DIV/IDIV + synchronous CPU fault | 11 | Whole | New IR ops + a shared arithmetic helper; divide-fault model. Authored here |
+| High-byte registers (AH/CH/DH/BH), 8-bit MUL/IMUL/DIV/IDIV, accumulator-immediate ADC/SBB, 16-bit/memory PUSH/POP | 12 | Whole | Intel SDM Vol. 2 §2.2.1; authored here |
 
 ### PS5 executable-format facts (Phase 4)
 

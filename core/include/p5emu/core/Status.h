@@ -73,6 +73,12 @@ enum class StatusCode : std::uint32_t {
   kInvalidIr,
   kBackendError,
 
+  // Synchronous guest CPU fault (Phase 11). A guest instruction detected an
+  // architectural fault -- distinct from a guest-memory fault (which uses the
+  // memory statuses above), from an unsupported instruction, and from an HLE
+  // failure. x86 divide error (#DE category) is the first instance.
+  kDivideError,
+
   // Execution bounds. A runaway program must terminate deterministically rather
   // than hang; a hang is not a diagnosable failure.
   kExecutionLimit,

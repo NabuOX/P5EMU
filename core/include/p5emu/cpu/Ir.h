@@ -137,6 +137,11 @@ enum class ArchRegister : std::uint8_t {
   kR8, kR9, kR10, kR11, kR12, kR13, kR14, kR15,
   kRip,
   kEflags,
+  // High-byte views of RAX/RCX/RDX/RBX (AH/CH/DH/BH). They alias bits 8..15 of
+  // the corresponding 64-bit register and are only ever 8-bit operands. Added in
+  // Phase 12 so the 8-bit MUL/IMUL/DIV/IDIV implicit AH result is representable
+  // without a special case in the backends.
+  kAh, kCh, kDh, kBh,
   kInvalidSentinel,  // Validation must reject this. Kept for negative tests.
 };
 
@@ -226,6 +231,24 @@ enum class OpKind : std::uint8_t {
   kExtend,  // value -> value. `mode` selects the extension mode.
   kTruncate,// value -> value, keep low N bits and zero-extend to 64
 
+  // -- Arithmetic: carry-in, wide, and faulting (Phase 11) ------------------
+  // These are SEMANTIC operations. They do not name any host instruction; a
+  // backend lowers them however it likes (native or via a shared helper), and
+  // two backends must agree.
+  //
+  // kAdcFlags / kSbbFlags: args = [a, b, carry_in, flags_out]; dest = the
+  //   width-masked result. `carry_in` is a 0/1 value (x86 CF as an input).
+  // kMulFlags / kIMulFlags: args = [a, b, flags_out]; dest = low half, dest2 =
+  //   high half of the (double-width) product, at `width`. Unsigned for
+  //   kMulFlags, signed for kIMulFlags. CF/OF are produced; the other arithmetic
+  //   flags are architecturally undefined for MUL/IMUL.
+  // kDivFlags / kIDivFlags: args = [dividend_hi, dividend_lo, divisor];
+  //   dest = quotient, dest2 = remainder. The dividend is double-width
+  //   (hi:lo); everything is masked to 2*8*width bits. These ops FAULT with a
+  //   divide error when the divisor is zero or the quotient does not fit
+  //   `width`, and commit NO result on a fault.
+  kAdcFlags, kSbbFlags, kMulFlags, kIMulFlags, kDivFlags, kIDivFlags,
+
   // -- Conditions --
   kTestCc,   // flags -> i8 (0 or 1)
 
@@ -264,6 +287,7 @@ enum class OperandRole : std::uint8_t {
   kDest = 0,   // value produced
   kSrc,        // general value operand
   kSrc2,       // second general value operand
+  kSrc3,       // third general value operand (e.g. an ADC carry input)
   kFlags,      // flags operand
   kFlagsOut,   // flags result
   kReg,        // architectural register selector (immediate, not a ValueId)
@@ -279,6 +303,10 @@ enum class OperandRole : std::uint8_t {
 struct Op {
   OpKind kind = OpKind::kInvalid;
   ValueId dest = kInvalidValue;      // kDest
+  // A SECOND result, used only by the double-width multiply/divide ops
+  // (kMulFlags/kIMulFlags: high half; kDivFlags/kIDivFlags: remainder). Left
+  // kInvalidValue by every other op; ValidateIr enforces that.
+  ValueId dest2 = kInvalidValue;
   std::vector<ValueId> args;         // ordered by position, see OperandRole
   std::vector<OperandRole> roles;    // parallel to `args`
   ArchRegister reg = ArchRegister::kInvalid;  // kReg

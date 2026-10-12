@@ -368,6 +368,95 @@ ValueId Builder::EmitExtend(ValueId value, ExtendMode mode) {
   return dest;
 }
 
+// --- Phase 11 arithmetic ---------------------------------------------------
+namespace {
+ValueId EmitCarryFlagsImpl(Builder* b, OpKind kind, ValueId a, ValueId bval,
+                           ValueId carry, std::uint8_t width_bytes) {
+  const ValueId dest = b->DefineValue(ValueType::kI64);
+  if (dest == kInvalidValue) return dest;
+  const ValueId flags = b->DefineValue(ValueType::kFlags);
+  if (flags == kInvalidValue) return dest;
+  Op op;
+  op.kind = kind;
+  op.dest = dest;
+  op.args = {a, bval, carry, flags};
+  op.roles = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kSrc3,
+              OperandRole::kFlagsOut};
+  op.width = width_bytes;
+  b->Append(std::move(op));
+  b->EmitStoreFlags(flags);
+  return dest;
+}
+
+ValueId EmitWideMulImpl(Builder* b, OpKind kind, ValueId a, ValueId bval,
+                        ValueId* high_out, std::uint8_t width_bytes) {
+  const ValueId lo = b->DefineValue(ValueType::kI64);
+  if (lo == kInvalidValue) return lo;
+  const ValueId hi = b->DefineValue(ValueType::kI64);
+  if (hi == kInvalidValue) return lo;
+  const ValueId flags = b->DefineValue(ValueType::kFlags);
+  if (flags == kInvalidValue) return lo;
+  Op op;
+  op.kind = kind;
+  op.dest = lo;
+  op.dest2 = hi;
+  op.args = {a, bval, flags};
+  op.roles = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kFlagsOut};
+  op.width = width_bytes;
+  b->Append(std::move(op));
+  b->EmitStoreFlags(flags);
+  if (high_out != nullptr) *high_out = hi;
+  return lo;
+}
+
+ValueId EmitDivImpl(Builder* b, OpKind kind, ValueId hi, ValueId lo,
+                    ValueId divisor, ValueId* rem_out,
+                    std::uint8_t width_bytes) {
+  const ValueId quot = b->DefineValue(ValueType::kI64);
+  if (quot == kInvalidValue) return quot;
+  const ValueId rem = b->DefineValue(ValueType::kI64);
+  if (rem == kInvalidValue) return quot;
+  Op op;
+  op.kind = kind;
+  op.dest = quot;
+  op.dest2 = rem;
+  op.args = {hi, lo, divisor};
+  op.roles = {OperandRole::kSrc, OperandRole::kSrc2, OperandRole::kSrc3};
+  op.width = width_bytes;
+  b->Append(std::move(op));
+  if (rem_out != nullptr) *rem_out = rem;
+  return quot;
+}
+}  // namespace
+
+ValueId Builder::EmitAdcFlags(ValueId a, ValueId b, ValueId carry_in,
+                              std::uint8_t width_bytes) {
+  return EmitCarryFlagsImpl(this, OpKind::kAdcFlags, a, b, carry_in, width_bytes);
+}
+ValueId Builder::EmitSbbFlags(ValueId a, ValueId b, ValueId borrow_in,
+                              std::uint8_t width_bytes) {
+  return EmitCarryFlagsImpl(this, OpKind::kSbbFlags, a, b, borrow_in, width_bytes);
+}
+ValueId Builder::EmitMulFlags(ValueId a, ValueId b, ValueId* high_out,
+                              std::uint8_t width_bytes) {
+  return EmitWideMulImpl(this, OpKind::kMulFlags, a, b, high_out, width_bytes);
+}
+ValueId Builder::EmitIMulFlags(ValueId a, ValueId b, ValueId* high_out,
+                               std::uint8_t width_bytes) {
+  return EmitWideMulImpl(this, OpKind::kIMulFlags, a, b, high_out, width_bytes);
+}
+ValueId Builder::EmitDiv(ValueId dividend_hi, ValueId dividend_lo, ValueId divisor,
+                         ValueId* rem_out, std::uint8_t width_bytes) {
+  return EmitDivImpl(this, OpKind::kDivFlags, dividend_hi, dividend_lo, divisor,
+                     rem_out, width_bytes);
+}
+ValueId Builder::EmitIDiv(ValueId dividend_hi, ValueId dividend_lo,
+                          ValueId divisor, ValueId* rem_out,
+                          std::uint8_t width_bytes) {
+  return EmitDivImpl(this, OpKind::kIDivFlags, dividend_hi, dividend_lo, divisor,
+                     rem_out, width_bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Flags
 // ---------------------------------------------------------------------------

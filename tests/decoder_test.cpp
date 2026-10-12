@@ -319,12 +319,13 @@ P5EMU_TEST(Decoder, TestRegReg) {
   CHECK_EQ(static_cast<int>(insn.src.reg), 3);
 }
 
-P5EMU_TEST(Decoder, AdcIsExplicitlyUnsupported) {
-  // 48 11 D8 = ADC rax, rbx. ADC consumes CF, which Phase 1 does not model.
-  // It must be REJECTED, not decoded and silently mis-evaluated.
+P5EMU_TEST(Decoder, AdcIsNowSupported) {
+  // 48 11 D8 = ADC rax, rbx. Phase 11 added ADC with an explicit carry-in IR
+  // operand, so it now decodes (it is no longer rejected).
   Instruction insn;
-  const Status st = Decode(B({0x48, 0x11, 0xD8}), &insn);
-  CHECK(st.code() == StatusCode::kUnimplementedInstruction);
+  REQUIRE(Decode(B({0x48, 0x11, 0xD8}), &insn).ok());
+  CHECK_EQ(std::string(MnemonicName(insn.mnemonic)), std::string("adc"));
+  CHECK_EQ(static_cast<int>(insn.op_size), 8);
 }
 
 // ===========================================================================
@@ -721,11 +722,21 @@ P5EMU_TEST(DecoderRoundTrip, NullOutputBufferIsRejected) {
 
 P5EMU_TEST(Decoder, SupportedCountMatchesTheDocumentedSubset) {
   // The count is a checked constant, so adding an instruction forces a
-  // deliberate decision to update it and the coverage report.
-  CHECK_EQ(X64Decoder::SupportedCount(), std::size_t{20});
+  // deliberate decision to update it and the coverage report. Phase 11 added
+  // push/pop/leave and adc/sbb/mul/imul/div/idiv (20 -> 29).
+  CHECK_EQ(X64Decoder::SupportedCount(), std::size_t{29});
   CHECK(X64Decoder::IsSupported(Mnemonic::kMov));
   CHECK(X64Decoder::IsSupported(Mnemonic::kLea));
   CHECK(X64Decoder::IsSupported(Mnemonic::kInt3));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kPush));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kPop));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kLeave));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kAdc));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kSbb));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kMul));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kIMul));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kDiv));
+  CHECK(X64Decoder::IsSupported(Mnemonic::kIDiv));
   CHECK(!X64Decoder::IsSupported(Mnemonic::kUnimplemented));
 }
 

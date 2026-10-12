@@ -108,6 +108,10 @@ enum class TerminationReason : std::uint8_t {
   // An external call (HLE import) could not be dispatched, or the host
   // implementation returned a failure. Distinct from a guest trap.
   kHleError,
+  // A synchronous guest CPU fault (e.g. x86 divide error). Distinct from
+  // kFault, which is a guest-MEMORY fault. The specific fault is carried in
+  // ExecutionResult::status (e.g. kDivideError).
+  kCpuFault,
 };
 
 const char* TerminationReasonName(TerminationReason reason) noexcept;

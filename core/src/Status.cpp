@@ -96,6 +96,8 @@ const char* StatusCodeName(StatusCode code) noexcept {
       return "invalid-ir";
     case StatusCode::kBackendError:
       return "backend-error";
+    case StatusCode::kDivideError:
+      return "divide-error";
     case StatusCode::kExecutionLimit:
       return "execution-limit";
     case StatusCode::kUnknownRuntimeField:

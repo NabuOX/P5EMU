@@ -199,6 +199,20 @@ add_test(NAME p5emu.sce.e2e        COMMAND p5emu_tests SceDynamicLinkingE2E.)
 # --- Phase 10 suites ---
 add_test(NAME p5emu.sce.moduleinfo COMMAND p5emu_tests SceModuleInfoEvidence.)
 
+# --- Phase 11 suites ---
+add_test(NAME p5emu.cpu.stack        COMMAND p5emu_tests CpuStack.)
+add_test(NAME p5emu.cpu.stacknegative COMMAND p5emu_tests CpuStackNegative.)
+add_test(NAME p5emu.cpu.arith        COMMAND p5emu_tests CpuArith.)
+add_test(NAME p5emu.cpu.arithnegative COMMAND p5emu_tests CpuArithNegative.)
+add_test(NAME p5emu.cpu.arithproperty COMMAND p5emu_tests CpuArithProperty.)
+
+# --- Phase 12 suites ---
+add_test(NAME p5emu.cpu.highbyte     COMMAND p5emu_tests CpuHighByte.)
+add_test(NAME p5emu.cpu.arith8       COMMAND p5emu_tests CpuArith8.)
+add_test(NAME p5emu.cpu.arithaccum   COMMAND p5emu_tests CpuArithAccum.)
+add_test(NAME p5emu.cpu.pushpop16    COMMAND p5emu_tests CpuPushPop16.)
+add_test(NAME p5emu.cpu.pushpopmem   COMMAND p5emu_tests CpuPushPopMem.)
+
 # Suite inventory, for the Phase 1 gate report.
 set(P5EMU_TEST_SUITES
   "p5emu.core;core_test.cpp: Core (logging, status, version)"
@@ -287,4 +301,14 @@ set(P5EMU_TEST_SUITES
   "p5emu.sce.property;sce_metadata_test.cpp: randomized classification campaign (2000 cases)"
   "p5emu.sce.e2e;sce_metadata_test.cpp: metadata + linker + runtime + CPU (interpreter + AArch64)"
   "p5emu.sce.moduleinfo;sce_metadata_test.cpp: DT_OS_MODULE_INFO evidence boundary (Phase 10)"
+  "p5emu.cpu.stack;widths_test.cpp: PUSH/POP/LEAVE raw-x86 differential (Phase 11)"
+  "p5emu.cpu.stacknegative;widths_test.cpp: RSP-direction and LEAVE-source negatives (Phase 11)"
+  "p5emu.cpu.arith;widths_test.cpp: ADC/SBB/MUL/IMUL/DIV/IDIV raw-x86 differential (Phase 11)"
+  "p5emu.cpu.arithnegative;widths_test.cpp: divide-fault commits nothing (Phase 11)"
+  "p5emu.cpu.arithproperty;widths_test.cpp: randomized arithmetic differential (Phase 11)"
+  "p5emu.cpu.highbyte;widths_test.cpp: AH/CH/DH/BH access (Phase 12)"
+  "p5emu.cpu.arith8;widths_test.cpp: 8-bit MUL/IMUL/DIV/IDIV (Phase 12)"
+  "p5emu.cpu.arithaccum;widths_test.cpp: ADC/SBB accumulator-immediate (Phase 12)"
+  "p5emu.cpu.pushpop16;widths_test.cpp: 16-bit PUSH/POP (Phase 12)"
+  "p5emu.cpu.pushpopmem;widths_test.cpp: memory-source PUSH/POP (Phase 12)"
 )

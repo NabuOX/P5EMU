@@ -77,8 +77,18 @@ std::uint64_t CtxOffsetForRegister(ir::ArchRegister r) {
     case ir::ArchRegister::kR15: return P5EMU_A64_CTX_GPR_OFFSET + 15 * 8;
     case ir::ArchRegister::kRip: return P5EMU_A64_CTX_RIP_OFFSET;
     case ir::ArchRegister::kEflags: return P5EMU_A64_CTX_EFLAGS_OFFSET;
+    // High-byte views alias the parent GPR slot (bits 8..15 handled separately).
+    case ir::ArchRegister::kAh: return P5EMU_A64_CTX_GPR_OFFSET + 0 * 8;
+    case ir::ArchRegister::kCh: return P5EMU_A64_CTX_GPR_OFFSET + 2 * 8;
+    case ir::ArchRegister::kDh: return P5EMU_A64_CTX_GPR_OFFSET + 3 * 8;
+    case ir::ArchRegister::kBh: return P5EMU_A64_CTX_GPR_OFFSET + 1 * 8;
     default: return kInvalidOff;
   }
+}
+
+bool IsHighByte(ir::ArchRegister r) {
+  return r == ir::ArchRegister::kAh || r == ir::ArchRegister::kCh ||
+         r == ir::ArchRegister::kDh || r == ir::ArchRegister::kBh;
 }
 
 class Gen {
@@ -92,9 +102,14 @@ class Gen {
     }
 
     value_count_ = MaxValueId() + 1u;
-    // One extra slot holds the memory-helper status word.
+    // The frame holds one 16-byte slot per value, then four 8-byte scratch slots:
+    // the memory-helper status word, and the arithmetic helper's out2 / flags /
+    // fault outputs.
     status_slot_off_ = 16u * value_count_;
-    frame_bytes_ = 16u * (value_count_ + 1u);
+    out2_slot_off_ = status_slot_off_ + 8u;
+    flags_slot_off_ = status_slot_off_ + 16u;
+    fault_slot_off_ = status_slot_off_ + 24u;
+    frame_bytes_ = 16u * value_count_ + 32u;
     if (frame_bytes_ > 32760u) {
       // The unsigned-offset loads/stores used for slots top out at 4095*8
       // bytes. A program past that needs a different addressing strategy, not a
@@ -110,6 +125,7 @@ class Gen {
     fault_exit_ = asm_.NewLabel();
     step_exit_ = asm_.NewLabel();
     hle_error_exit_ = asm_.NewLabel();
+    cpu_fault_exit_ = asm_.NewLabel();
     for (const ir::Block& block : program_.blocks) {
       block_labels_[block.id] = asm_.NewLabel();
     }
@@ -156,6 +172,13 @@ class Gen {
     // x9 holds the HLE helper status when control reaches here.
     CtxStore(kT0, P5EMU_A64_CTX_FAULT_OFFSET);
     asm_.MovImm64(kT0, P5EMU_A64_REASON_HLE_ERROR);
+    CtxStore(kT0, P5EMU_A64_CTX_STATUS_OFFSET);
+    asm_.B(epilogue_);
+
+    asm_.Bind(cpu_fault_exit_);
+    // kT1 holds the guest CPU fault kind when control reaches here.
+    CtxStore(kT1, P5EMU_A64_CTX_FAULT_OFFSET);
+    asm_.MovImm64(kT0, P5EMU_A64_REASON_CPU_FAULT);
     CtxStore(kT0, P5EMU_A64_CTX_STATUS_OFFSET);
     asm_.B(epilogue_);
 
@@ -329,11 +352,15 @@ class Gen {
       case ir::OpKind::kGetReg: {
         const Status st = LoadRegisterValue(op.reg, kT0);
         if (!st.ok()) return st;
-        // A narrow read observes only the low bits (AL is RAX[7:0]).
-        const std::uint32_t w = NormWidth(op.width);
-        if (w < 8) {
-          asm_.MovImm64(kMask, WidthMask(op.width));
-          Raw(arm64::enc::LogicalReg(0, kT0, kT0, kMask, 0, 0));  // and
+        if (IsHighByte(op.reg)) {
+          Raw(arm64::enc::Ubfx(kT0, kT0, 8, 8));  // bits 8..15 (AH/CH/DH/BH)
+        } else {
+          // A narrow read observes only the low bits (AL is RAX[7:0]).
+          const std::uint32_t w = NormWidth(op.width);
+          if (w < 8) {
+            asm_.MovImm64(kMask, WidthMask(op.width));
+            Raw(arm64::enc::LogicalReg(0, kT0, kT0, kMask, 0, 0));  // and
+          }
         }
         SlotStore(kT0, op.dest);
         break;
@@ -346,7 +373,17 @@ class Gen {
           return Unsupported("invalid architectural register in IR");
         }
         const std::uint32_t w = NormWidth(op.width);
-        if (w == 8) {
+        if (IsHighByte(op.reg)) {
+          // bits 8..15 = (v & 0xFF) << 8, preserving every other bit.
+          asm_.MovImm64(kMask, 0xFF);
+          Raw(arm64::enc::LogicalReg(0, kT0, kT0, kMask, 0, 0));  // v & 0xFF
+          Raw(arm64::enc::LslImm(kT0, kT0, 8));                   // << 8
+          CtxLoad(kT1, off);
+          asm_.MovImm64(kMask, ~std::uint64_t{0xFF00u});
+          Raw(arm64::enc::LogicalReg(0, kT1, kT1, kMask, 0, 0));  // old & ~0xFF00
+          Raw(arm64::enc::LogicalReg(1, kT0, kT1, kT0, 0, 0));    // merge
+          CtxStore(kT0, off);
+        } else if (w == 8) {
           CtxStore(kT0, off);  // RAX: replace all 64 bits
         } else if (w == 4) {
           if (!options_.inject_no_zero_extend) {
@@ -441,6 +478,67 @@ class Gen {
         EmitLogicFlags(2, op.args[0], op.args[1], op.dest, op.args[2],
                        op.width);
         break;
+
+      // Phase 11 arithmetic. Lowered through the SHARED arithmetic helper, so the
+      // interpreter and this backend have one definition of the semantics,
+      // including the divide fault. No partial result is committed on a fault:
+      // the helper leaves out2/flags untouched and sets the fault slot, and the
+      // generated code checks it before storing anything.
+      case ir::OpKind::kAdcFlags:
+      case ir::OpKind::kSbbFlags:
+      case ir::OpKind::kMulFlags:
+      case ir::OpKind::kIMulFlags:
+      case ir::OpKind::kDivFlags:
+      case ir::OpKind::kIDivFlags: {
+        std::uint64_t opcode = P5EMU_A64_ARITH_ADC;
+        switch (op.kind) {
+          case ir::OpKind::kAdcFlags:  opcode = P5EMU_A64_ARITH_ADC; break;
+          case ir::OpKind::kSbbFlags:  opcode = P5EMU_A64_ARITH_SBB; break;
+          case ir::OpKind::kMulFlags:  opcode = P5EMU_A64_ARITH_MUL; break;
+          case ir::OpKind::kIMulFlags: opcode = P5EMU_A64_ARITH_IMUL; break;
+          case ir::OpKind::kDivFlags:  opcode = P5EMU_A64_ARITH_DIV; break;
+          case ir::OpKind::kIDivFlags: opcode = P5EMU_A64_ARITH_IDIV; break;
+          default: break;
+        }
+        asm_.MovImm64(0, opcode);
+        asm_.MovImm64(1, NormWidth(op.width));
+        SlotLoad(2, op.args[0]);  // a / dividend_hi
+        SlotLoad(3, op.args[1]);  // b / dividend_lo
+        const bool has_third =
+            (op.kind == ir::OpKind::kAdcFlags ||
+             op.kind == ir::OpKind::kSbbFlags ||
+             op.kind == ir::OpKind::kDivFlags ||
+             op.kind == ir::OpKind::kIDivFlags);
+        if (has_third) {
+          SlotLoad(4, op.args[2]);  // carry-in / dividend divisor
+        } else {
+          asm_.MovImm64(4, 0);
+        }
+        AddSpImm(5, kSp, out2_slot_off_);
+        AddSpImm(6, kSp, flags_slot_off_);
+        AddSpImm(7, kSp, fault_slot_off_);
+        asm_.MovImm64(kT0, 0);
+        StrOff(kT0, kSp, fault_slot_off_);  // default: no fault
+        CtxLoad(kT0, P5EMU_A64_CTX_FN_ARITH_OFFSET);
+        Raw(arm64::enc::Blr(kT0));
+        LdrOff(kT1, kSp, fault_slot_off_);
+        asm_.Cbnz(kT1, cpu_fault_exit_);   // fault: commit nothing
+        SlotStore(0, op.dest);             // primary result in x0
+        if (op.dest2 != ir::kInvalidValue) {
+          LdrOff(kT0, kSp, out2_slot_off_);
+          SlotStore(kT0, op.dest2);
+        }
+        if (op.kind == ir::OpKind::kAdcFlags ||
+            op.kind == ir::OpKind::kSbbFlags) {
+          LdrOff(kT0, kSp, flags_slot_off_);
+          SlotStore(kT0, op.args[3]);  // ADC/SBB: flags_out is arg 3
+        } else if (op.kind == ir::OpKind::kMulFlags ||
+                   op.kind == ir::OpKind::kIMulFlags) {
+          LdrOff(kT0, kSp, flags_slot_off_);
+          SlotStore(kT0, op.args[2]);  // MUL/IMUL: flags_out is arg 2
+        }
+        break;
+      }
 
       case ir::OpKind::kCmp:
         EmitArithFlags(true, op.args[0], op.args[1], ir::kInvalidValue,
@@ -898,8 +996,12 @@ class Gen {
   int fault_exit_ = -1;
   int step_exit_ = -1;
   int hle_error_exit_ = -1;
+  int cpu_fault_exit_ = -1;
   std::uint64_t value_count_ = 0;
   std::uint64_t status_slot_off_ = 0;
+  std::uint64_t out2_slot_off_ = 0;
+  std::uint64_t flags_slot_off_ = 0;
+  std::uint64_t fault_slot_off_ = 0;
   std::uint64_t frame_bytes_ = 0;
   std::string reason_;
   bool at_ = true;  // false if an addressing limit was exceeded

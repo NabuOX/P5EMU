@@ -95,6 +95,26 @@ class Builder {
                     std::uint8_t width_bytes = 8);
   ValueId EmitExtend(ValueId value, ExtendMode mode);
 
+  // -- Phase 11 arithmetic -------------------------------------------------
+  // ADC/SBB consume an explicit carry-in value (0 or 1) and write flags to
+  // EFLAGS. The result is width-masked.
+  ValueId EmitAdcFlags(ValueId a, ValueId b, ValueId carry_in,
+                       std::uint8_t width_bytes = 8);
+  ValueId EmitSbbFlags(ValueId a, ValueId b, ValueId borrow_in,
+                       std::uint8_t width_bytes = 8);
+  // MUL/IMUL return the LOW half; the HIGH half is written to *high_out (which
+  // may be null). CF/OF are written to EFLAGS.
+  ValueId EmitMulFlags(ValueId a, ValueId b, ValueId* high_out,
+                       std::uint8_t width_bytes = 8);
+  ValueId EmitIMulFlags(ValueId a, ValueId b, ValueId* high_out,
+                        std::uint8_t width_bytes = 8);
+  // DIV/IDIV return the quotient; the remainder is written to *rem_out (which
+  // may be null). They write no flags. They fault on a divide error.
+  ValueId EmitDiv(ValueId dividend_hi, ValueId dividend_lo, ValueId divisor,
+                  ValueId* rem_out, std::uint8_t width_bytes = 8);
+  ValueId EmitIDiv(ValueId dividend_hi, ValueId dividend_lo, ValueId divisor,
+                   ValueId* rem_out, std::uint8_t width_bytes = 8);
+
   ValueId EmitMaterializeConstant(std::uint64_t value, ValueType type);
   ValueId EmitLoadFlags();
   void EmitStoreFlags(ValueId flags);

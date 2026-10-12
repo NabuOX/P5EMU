@@ -91,6 +91,14 @@ std::uint32_t ArchRegisterNumber(ArchRegister reg) noexcept {
     return static_cast<std::uint32_t>(reg) -
            static_cast<std::uint32_t>(ArchRegister::kRax);
   }
+  // High-byte views alias RAX/RCX/RDX/RBX (numbers 0..3).
+  switch (reg) {
+    case ArchRegister::kAh: return 0;
+    case ArchRegister::kCh: return 1;
+    case ArchRegister::kDh: return 2;
+    case ArchRegister::kBh: return 3;
+    default: break;
+  }
   return 0xffu;
 }
 
@@ -115,6 +123,10 @@ const char* ArchRegisterName(ArchRegister reg) noexcept {
     case ArchRegister::kR15:            return "r15";
     case ArchRegister::kRip:            return "rip";
     case ArchRegister::kEflags:         return "eflags";
+    case ArchRegister::kAh:             return "ah";
+    case ArchRegister::kCh:             return "ch";
+    case ArchRegister::kDh:             return "dh";
+    case ArchRegister::kBh:             return "bh";
     case ArchRegister::kInvalidSentinel:return "<sentinel>";
   }
   return "<unknown>";
@@ -161,6 +173,12 @@ const char* OpKindName(OpKind kind) noexcept {
     case OpKind::kSar:         return "sar";
     case OpKind::kExtend:      return "extend";
     case OpKind::kTruncate:    return "truncate";
+    case OpKind::kAdcFlags:    return "adc_flags";
+    case OpKind::kSbbFlags:    return "sbb_flags";
+    case OpKind::kMulFlags:    return "mul_flags";
+    case OpKind::kIMulFlags:   return "imul_flags";
+    case OpKind::kDivFlags:    return "div_flags";
+    case OpKind::kIDivFlags:   return "idiv_flags";
     case OpKind::kAddrCalc:    return "addr_calc";
     case OpKind::kTestCc:      return "test_cc";
     case OpKind::kNop:         return "nop";
@@ -228,6 +246,7 @@ void AppendRole(std::string* out, OperandRole role) {
     case OperandRole::kDest:      *out += "dest";      return;
     case OperandRole::kSrc:       *out += "src";       return;
     case OperandRole::kSrc2:      *out += "src2";      return;
+    case OperandRole::kSrc3:      *out += "src3";      return;
     case OperandRole::kFlags:     *out += "flags";     return;
     case OperandRole::kFlagsOut:  *out += "flags_out"; return;
     case OperandRole::kReg:       *out += "reg";       return;
