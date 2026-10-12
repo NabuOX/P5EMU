@@ -1,0 +1,16 @@
+P5EMU
+Copyright 2026 P5EMU contributors
+
+This product is an independent, experimental PlayStation 5 emulator
+architecture. It is not affiliated with, endorsed by, or derived from
+Sony Interactive Entertainment, and it contains no Sony code, firmware,
+keys, or assets.
+
+P5EMU is licensed under the Apache License, Version 2.0. See the LICENSE
+file for the full text.
+
+Third-party projects referenced during research, and external test
+infrastructure, are listed in ACKNOWLEDGEMENTS.md, PROVENANCE.md and
+docs/research/licenses.md. Their licenses are their own and are not
+changed by this notice; any reuse obligation is recorded in
+THIRD_PARTY_LICENSES/ and PROVENANCE.md.

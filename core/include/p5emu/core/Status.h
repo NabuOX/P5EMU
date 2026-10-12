@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-P5EMU-Proprietary
+// SPDX-License-Identifier: Apache-2.0
 //
 // Error model. P5EMU never throws across a component boundary; components
 // return Status. This keeps the interpreter/JIT boundary exception-free and

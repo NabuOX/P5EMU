@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-P5EMU-Proprietary
+// SPDX-License-Identifier: Apache-2.0
 //
 // x86-64 decoder tests.
 //

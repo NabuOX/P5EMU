@@ -60,4 +60,4 @@ matrix with upstream URLs and pinned commits.
 **Attribution is necessary and never sufficient.** A licence obligation cannot be
 discharged by writing a credit line. See
 [`../docs/research/licenses.md`](../docs/research/licenses.md) §6 for why P5EMU
-is independently authored and currently proprietary.
+is independently authored (Apache-2.0) and vendors no copyleft source.

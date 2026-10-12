@@ -28,7 +28,8 @@ What this permits and what it does not:
   design approaches, then expressing them independently.
 - **Does not permit:** copying source lines, tables, expressions, or comment
   text, from any source, copyleft or otherwise, without an explicit recorded
-  reuse decision under [`LICENSE.md`](LICENSE.md) §3.
+  reuse decision (recorded here and in
+  [`THIRD_PARTY_LICENSES/README.md`](THIRD_PARTY_LICENSES/README.md)).
 
 ---
 
@@ -161,7 +162,8 @@ copyleft code was copied into P5EMU: the emitted AArch64 comes from P5EMU's own
 *(none)*
 
 No third-party code has been imported into P5EMU. This section stays empty until
-a component passes the review in [`LICENSE.md`](LICENSE.md) §3.
+a component passes the review recorded in
+[`THIRD_PARTY_LICENSES/README.md`](THIRD_PARTY_LICENSES/README.md).
 
 ---
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-P5EMU-Proprietary
+// SPDX-License-Identifier: Apache-2.0
 //
 // Contract tests for the CPU model.
 //

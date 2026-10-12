@@ -1,8 +1,8 @@
 # Acknowledgements
 
-P5EMU is an independent, proprietary project. It is not affiliated with,
-endorsed by, or derived from Sony Interactive Entertainment, and it contains no
-Sony code, firmware, keys, or assets.
+P5EMU is an independent, open-source project licensed under Apache-2.0. It is
+not affiliated with, endorsed by, or derived from Sony Interactive
+Entertainment, and it contains no Sony code, firmware, keys, or assets.
 
 This file records **architectural and factual research**, not code reuse. The
 code-reuse record is [`../PROVENANCE.md`](../PROVENANCE.md); its adaptations

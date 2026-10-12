@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: LicenseRef-P5EMU-Proprietary
+// SPDX-License-Identifier: Apache-2.0
 //
-// P5EMU source is independently authored and proprietary. See LICENSE.md and
+// P5EMU is an independent, open-source project. See LICENSE and
 // PROVENANCE.md before adding code here.
 
 #include "p5emu/cpu/CodeBuffer.h"

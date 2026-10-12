@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LicenseRef-P5EMU-Proprietary
+// SPDX-License-Identifier: Apache-2.0
 //
 // The CLI. Phase 6 adds the HLE foundation and the guest-to-host call bridge on
 // top of the CPU core, AArch64 backend, PS5 ELF loader and relocations: a guest

@@ -422,8 +422,14 @@ different**, and inheriting a corpus's provenance is not automatic.
 > that P5EMU should also adopt a permissive project-wide licence. That
 > conclusion is **withdrawn**. Dependency compatibility does not determine our
 > own licence, and the §4 provenance relationship below has not been reviewed by
-> counsel. See [`../../LICENSE.md`](../../LICENSE.md) §2. P5EMU is currently
-> proprietary, all rights reserved.
+> counsel.
+
+> **Phase-7.1 owner decision (2026-10).** P5EMU's outbound licence is now
+> **Apache-2.0** (see [`../../LICENSE`](../../LICENSE) and
+> [`../../NOTICE`](../../NOTICE)). This changes P5EMU's own terms only. It does
+> **not** relicense any project listed in this matrix: every external project
+> and tool keeps its own licence, and P5EMU's Apache-2.0 grant does not extend
+> to them. The provenance conclusions above remain binding.
 
 The reasoning chain:
 

@@ -1,14 +1,16 @@
 # P5EMU
 
-An independent PlayStation 5 emulator, designed from day one for ARM64 and
-ultimately iPhone/iPad.
+An independent, experimental PlayStation 5 emulator architecture, designed from
+day one for portability, with ARM64 and ultimately iPhone/iPad as important
+long-term targets.
 
-**Status: Phase 6 — HLE foundation and guest-to-host call bridge. A synthetic
-guest executable's import is bound to an HLE binding (a guest trampoline
-address), the guest `CALL` reaches the dispatcher, a P5EMU-owned host
-implementation runs, the guest return value is delivered, and execution resumes.
-The architecture is backend-independent (reference interpreter and AArch64).
-No Sony HLE is implemented; no Sony material is present.**
+**Status: Phase 0–7 — the architecture foundation is complete and has passed
+external review.** The pipeline runs end to end on synthetic inputs: x86-64
+decode → P5EMU IR → { reference interpreter | AArch64 backend }, with a
+transactional ELF/relocation loader, an HLE guest-to-host bridge, and a
+multi-module, multi-region process runtime. **No commercial game runs today;
+there is no PS5 compatibility claim; and no Sony material is present.** See
+[Licence](#licence) for the current terms.
 
 ```
 PS5 x86-64 guest
@@ -23,6 +25,24 @@ x86-64 decode → P5EMU IR → { Interpreter | ARM64 backend }
 ```
 
 ---
+
+## Status at a glance
+
+**Implemented today (verified):** a documented x86-64 decoder subset; the P5EMU
+SSA IR plus its validator; a reference interpreter that is the differential
+oracle; the AArch64 emitter, code generator and backend, executed
+independently under `qemu-aarch64`; differential, randomized, fuzz and property
+test infrastructure; a generic ELF64 + PS5-layer loader; relocations and an
+import resolver; the HLE guest-to-host bridge; and a transactional, multi-module,
+multi-region process runtime.
+
+**Research in progress:** the GPU path (RDNA 2 / shader translation), Apple
+platform constraints (W^X / JIT), and the evidence audits that keep PS5 behaviour
+honestly tagged. See [`ROADMAP.md`](ROADMAP.md).
+
+**Long-term goals:** a portable, backend-independent PS5 emulator architecture
+that can run on Apple ARM64, built by a broad, collaborative community. None of
+this is a compatibility or availability claim today.
 
 ## What exists right now
 
@@ -41,7 +61,7 @@ Phase 1 CPU pipeline, tested end to end:
 - **`Differential` harness** — compares backends field by field, with a
   deliberately buggy backend proving the harness can actually detect a
   divergence.
-- A self-contained test harness (57 CTest suites), a provenance gate, and a
+- A self-contained test harness (69 CTest suites), a provenance gate, and a
   research corpus.
 
 Phase 2 adds the first real execution backend:
@@ -195,6 +215,7 @@ boundary between public knowledge and prohibited material.
 | [`docs/architecture/relocations.md`](docs/architecture/relocations.md) | Relocations, load bias, import requirement model, resolver lifecycle |
 | [`docs/architecture/hle.md`](docs/architecture/hle.md) | HLE: identity, registry, guest ABI, dispatch, trampolines, reentrancy |
 | [`docs/architecture/runtime.md`](docs/architecture/runtime.md) | Runtime: address space, stack, process startup, module graph, load bias, resolution, multi-region transport |
+| [`docs/development.md`](docs/development.md) | Development guide: environment, build, tests, sanitizers, AArch64/qemu, provenance |
 | [`docs/research/ps5-runtime-evidence.md`](docs/research/ps5-runtime-evidence.md) | PS5 startup/runtime evidence audit — the P5EMU-vs-PS5 boundary |
 | [`docs/research/licenses.md`](docs/research/licenses.md) | License matrix, classifications A–D, the differential argument |
 | [`docs/research/cpu-feasibility.md`](docs/research/cpu-feasibility.md) | IR design comparison, memory models, W^X, can FEX run on iOS |
@@ -206,12 +227,43 @@ boundary between public knowledge and prohibited material.
 
 ---
 
+## Contributing
+
+P5EMU is preparing for a public, collaborative open-source release. If you would
+like to help:
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — where to contribute, the evidence
+  standard, and the provenance rules.
+- [`ROADMAP.md`](ROADMAP.md) — work areas, with good first contributions.
+- [`docs/development.md`](docs/development.md) — build, test, sanitizers, the
+  AArch64/qemu harness, and where the documentation lives.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — how we collaborate.
+- [`SECURITY.md`](SECURITY.md) — how security issues will be reported.
+
+Contributions must respect the provenance rules: no Sony SDK/firmware/keys/game
+material, and no copied incompatible source.
+
+---
+
 ## Licence
 
-**Proprietary, all rights reserved.** See [`LICENSE.md`](LICENSE.md). The project
-was formerly a Phase-0 candidate for Apache-2.0; that was superseded by the
-decision to keep P5EMU proprietary. No third-party code is vendored, and
-copyleft source is never acceptable here.
+P5EMU is open-source software licensed under the **Apache License 2.0**. See
+[`LICENSE`](LICENSE) for the full text and [`NOTICE`](NOTICE) for the copyright
+notice.
+
+```
+Copyright 2026 P5EMU contributors
+```
+
+The Apache-2.0 licence includes an express patent grant and permits commercial
+and non-commercial use, modification, and redistribution (with the usual
+attribution and NOTICE obligations). It does not grant trademark rights.
+
+P5EMU contains no third-party code. Projects studied for research, and external
+test tools, keep their own licences and are not relicensed by P5EMU — see
+[`PROVENANCE.md`](PROVENANCE.md) and
+[`docs/research/licenses.md`](docs/research/licenses.md). No Sony material is
+present, and copyleft source is never acceptable in this repository.
 
 ---
 

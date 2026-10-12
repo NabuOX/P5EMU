@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LicenseRef-P5EMU-Proprietary
+# SPDX-License-Identifier: Apache-2.0
 
 # P5EMU test suites
 #
