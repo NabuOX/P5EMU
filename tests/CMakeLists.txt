@@ -33,6 +33,7 @@ set(P5EMU_TEST_SOURCES
   hle_fuzz_test.cpp
   runtime_test.cpp
   runtime_fuzz_test.cpp
+  runtime_profile_test.cpp
 )
 
 file(GLOB P5EMU_TEST_FILES_ON_DISK CONFIGURE_DEPENDS
@@ -173,6 +174,18 @@ add_test(NAME p5emu.runtime.readiness COMMAND p5emu_tests RuntimeReadiness.)
 add_test(NAME p5emu.runtime.fuzz     COMMAND p5emu_tests RuntimeFuzz.)
 add_test(NAME p5emu.runtime.property COMMAND p5emu_tests RuntimeProperty.)
 
+# --- Phase 8 suites ---
+add_test(NAME p5emu.runtimeprofile.classify COMMAND p5emu_tests RuntimeProfileClassify.)
+add_test(NAME p5emu.runtimeprofile.startup COMMAND p5emu_tests RuntimeStartupFields.)
+add_test(NAME p5emu.runtimeprofile.materialize COMMAND p5emu_tests RuntimeStartupMaterialize.)
+add_test(NAME p5emu.runtimeprofile.tls COMMAND p5emu_tests RuntimeTlsGap.)
+add_test(NAME p5emu.runtimeprofile.loadbias COMMAND p5emu_tests RuntimeLoadBiasEvidence.)
+add_test(NAME p5emu.runtimeprofile.metadata COMMAND p5emu_tests RuntimeModuleMetadata.)
+add_test(NAME p5emu.runtimeprofile.initorder COMMAND p5emu_tests RuntimeInitOrder.)
+add_test(NAME p5emu.runtimeprofile.e2e COMMAND p5emu_tests RuntimeProfileE2E.)
+add_test(NAME p5emu.runtimeprofile.negative COMMAND p5emu_tests RuntimeProfileNegative.)
+add_test(NAME p5emu.runtimeprofile.property COMMAND p5emu_tests RuntimeProfileProperty.)
+
 # Suite inventory, for the Phase 1 gate report.
 set(P5EMU_TEST_SUITES
   "p5emu.core;core_test.cpp: Core (logging, status, version)"
@@ -243,4 +256,14 @@ set(P5EMU_TEST_SUITES
   "p5emu.runtime.readiness;runtime_test.cpp: unresolved imports block readiness"
   "p5emu.runtime.fuzz;runtime_fuzz_test.cpp: multi-module load campaign (6000 cases)"
   "p5emu.runtime.property;runtime_fuzz_test.cpp: graph/bias property cases (2000 cases)"
+  "p5emu.runtimeprofile.classify;runtime_profile_test.cpp: generic-vs-PS5 profile selection"
+  "p5emu.runtimeprofile.startup;runtime_profile_test.cpp: structured startup state known/unknown"
+  "p5emu.runtimeprofile.materialize;runtime_profile_test.cpp: explicit refusal, no fabrication"
+  "p5emu.runtimeprofile.tls;runtime_profile_test.cpp: TLS/thread-pointer gap fails explicitly"
+  "p5emu.runtimeprofile.loadbias;runtime_profile_test.cpp: synthetic load-bias is not PS5 ASLR"
+  "p5emu.runtimeprofile.metadata;runtime_profile_test.cpp: evidence-bounded module metadata"
+  "p5emu.runtimeprofile.initorder;runtime_profile_test.cpp: synthetic vs PS5-unknown init order"
+  "p5emu.runtimeprofile.e2e;runtime_profile_test.cpp: loader->startup->CPU (interpreter + AArch64)"
+  "p5emu.runtimeprofile.negative;runtime_profile_test.cpp: UNKNOWN/evidence boundary proofs"
+  "p5emu.runtimeprofile.property;runtime_profile_test.cpp: randomized evidence-boundary campaign"
 )

@@ -36,6 +36,7 @@ add_library(p5emu_core STATIC
   src/loader/Loader.cpp
   src/hle/Hle.cpp
   src/runtime/Runtime.cpp
+  src/runtime/RuntimeProfile.cpp
 )
 
 target_include_directories(p5emu_core PUBLIC

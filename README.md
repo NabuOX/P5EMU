@@ -4,12 +4,14 @@ An independent, experimental PlayStation 5 emulator architecture, designed from
 day one for portability, with ARM64 and ultimately iPhone/iPad as important
 long-term targets.
 
-**Status: Phase 0–7 — the architecture foundation is complete and has passed
-external review.** The pipeline runs end to end on synthetic inputs: x86-64
-decode → P5EMU IR → { reference interpreter | AArch64 backend }, with a
-transactional ELF/relocation loader, an HLE guest-to-host bridge, and a
-multi-module, multi-region process runtime. **No commercial game runs today;
-there is no PS5 compatibility claim; and no Sony material is present.** See
+**Status: Phase 0–8.** The architecture foundation (Phases 0–7) is complete, and
+Phase 8 adds an **evidence-bounded PS5 runtime model**. The pipeline runs end to
+end on synthetic inputs: x86-64 decode → P5EMU IR → { reference interpreter |
+AArch64 backend }, with a transactional ELF/relocation loader, an HLE
+guest-to-host bridge, and a multi-module, multi-region process runtime. Phase 8
+represents PS5 runtime facts explicitly as known or UNKNOWN and refuses to
+fabricate undocumented behaviour. **No commercial game runs today; there is no
+PS5 compatibility claim; and no Sony material is present.** See
 [Licence](#licence) for the current terms.
 
 ```
@@ -217,6 +219,7 @@ boundary between public knowledge and prohibited material.
 | [`docs/architecture/runtime.md`](docs/architecture/runtime.md) | Runtime: address space, stack, process startup, module graph, load bias, resolution, multi-region transport |
 | [`docs/development.md`](docs/development.md) | Development guide: environment, build, tests, sanitizers, AArch64/qemu, provenance |
 | [`docs/research/ps5-runtime-evidence.md`](docs/research/ps5-runtime-evidence.md) | PS5 startup/runtime evidence audit — the P5EMU-vs-PS5 boundary |
+| [`docs/research/ps5-runtime-phase8.md`](docs/research/ps5-runtime-phase8.md) | Phase 8 evidence ledger — per-fact PS5 runtime classification (known/UNKNOWN) |
 | [`docs/research/licenses.md`](docs/research/licenses.md) | License matrix, classifications A–D, the differential argument |
 | [`docs/research/cpu-feasibility.md`](docs/research/cpu-feasibility.md) | IR design comparison, memory models, W^X, can FEX run on iOS |
 | [`docs/research/ios-jit-audit.md`](docs/research/ios-jit-audit.md) | Execution-environment matrix, App Store constraints, tiered strategy |

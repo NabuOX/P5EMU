@@ -88,6 +88,7 @@ architecture behaviour. No upstream source was copied.
 | kExternalCall IR + interpreter/backend dispatch | 6 | Whole | Authored here |
 | Runtime layer (`runtime::Runtime`: address space, stack, startup, graph, bias, resolution, merge, `LoadProcess`) | 7 | Whole | Composes the loader/reloc/HLE subsystems; all layouts synthetic. See `docs/research/ps5-runtime-evidence.md` for the PS5 evidence boundary |
 | Multi-region AArch64 transport (harness protocol v2) | 7 | Whole | Region table authored here; extends the Phase-2/3 protocol. Still test infrastructure |
+| Runtime profile / evidence boundary (`runtime::RuntimeProfile`) | 8 | Whole | Evidence classes, structured startup state, generic-vs-PS5 profile separation, module metadata. Authored here; treats PS5 runtime facts as documented-or-UNKNOWN. Ledger: `docs/research/ps5-runtime-phase8.md` |
 
 ### PS5 executable-format facts (Phase 4)
 

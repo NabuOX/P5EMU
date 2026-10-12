@@ -72,6 +72,35 @@ evidence supports it.
 
 ---
 
+## Research-only tracks (evidence first)
+
+These tracks produce **evidence and documentation**, not emulator behaviour.
+They are explicitly separated from implementation work because P5EMU does not
+implement PS5-specific behaviour without traceable evidence (see
+[`docs/research/ps5-runtime-phase8.md`](docs/research/ps5-runtime-phase8.md)).
+
+- 🟡 **Runtime evidence research** — extend the Phase 8 ledger: initial RSP,
+  argc/argv/envp/auxv, entry semantics. Output = classified facts, not code.
+- 🟡 **TLS / thread research** — the PS5 thread model and thread pointer remain
+  UNKNOWN; document findings before any implementation is proposed.
+- 🟡 **Module-init / finalization research** — PS5 initialization ordering and
+  hooks are UNKNOWN; investigate before implementing.
+- 🟡 **Sony symbol / NID research** — the NID algorithm and Sony import
+  structure layout are UNKNOWN; do not implement a guess.
+- 🟡 **Load-bias / address-space research** — PS5 ASLR/layout policy is UNKNOWN;
+  the synthetic allocator must not be relabelled.
+
+Implementation tracks that follow from evidence (pick up **after** the relevant
+research task is evidenced):
+
+- 🟡 **Loader metadata** — extend `ModuleMetadataInfo` only for evidenced fields.
+- 🟡 **HLE research → implementation** — evidence-first, synthetic providers now.
+- 🟢 **Testing / fuzzing** — property and malformed-input campaigns for new code.
+- 🟢 **CPU instruction coverage** — decode/semantics breadth (ISA-documented).
+- 🟡 **ARM64 backend improvements** — codegen coverage, multi-region transport.
+
+---
+
 ## Good first issues (how to start)
 
 1. Pick a 🟢 item in a subsystem you find interesting.

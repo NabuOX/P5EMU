@@ -76,6 +76,13 @@ enum class StatusCode : std::uint32_t {
   // Execution bounds. A runaway program must terminate deterministically rather
   // than hang; a hang is not a diagnosable failure.
   kExecutionLimit,
+
+  // Runtime profile / evidence boundary (Phase 8).
+  // A required runtime field is UNKNOWN (no value may be fabricated for it).
+  kUnknownRuntimeField,
+  // The selected runtime profile cannot be materialised with the current
+  // evidence (e.g. a PS5 profile that requires an unevidenced TLS/thread model).
+  kRuntimeProfileUnsupported,
 };
 
 const char* StatusCodeName(StatusCode code) noexcept;

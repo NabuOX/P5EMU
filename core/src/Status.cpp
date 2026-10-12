@@ -98,6 +98,10 @@ const char* StatusCodeName(StatusCode code) noexcept {
       return "backend-error";
     case StatusCode::kExecutionLimit:
       return "execution-limit";
+    case StatusCode::kUnknownRuntimeField:
+      return "unknown-runtime-field";
+    case StatusCode::kRuntimeProfileUnsupported:
+      return "runtime-profile-unsupported";
   }
   return "unknown";
 }

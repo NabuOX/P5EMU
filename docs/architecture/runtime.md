@@ -130,3 +130,32 @@ layout, argc/argv/envp/auxv contents and key set, TLS/thread-pointer setup,
 module-init ordering and constructors, address-space layout and ASLR, and the
 loader metadata passed to a title. See `docs/research/ps5-runtime-evidence.md`
 for the per-item audit.
+
+## 12. Runtime profile and evidence boundary (Phase 8)
+
+Phase 8 adds an explicit **runtime profile** layer (`runtime::RuntimeProfile`)
+that stops the generic Phase-7 model from masquerading as PS5 behaviour:
+
+- Every runtime fact carries an **evidence class** (Documented / Observed /
+  Inferred / Synthetic) and every startup field is **Known / Unknown /
+  Unsupported**.
+- `RuntimeProfileKind` separates `kGenericSynthetic` (the Phase-7 SysV model,
+  all fields Known and classed Synthetic) from `kPs5`.
+- `StartupState` structurally represents entry RIP, RSP/RBP, thread pointer,
+  argc/argv/envp/auxv, and stack alignment, plus a runtime profile and the
+  generic concrete image.
+- `MaterializeStartup` succeeds **only** when every required field is Known.
+  A PS5 profile (entry Known/Documented, the rest Unknown) is **refused** with
+  `kUnknownRuntimeField` and a blocker list — values are never fabricated.
+- `CheckThreadPointerSupport` fails explicitly (`kRuntimeProfileUnsupported`)
+  when the thread pointer is not evidenced: there is no fake thread pointer.
+- `Ps5LoadBiasEvidence()` records that PS5 load-address policy is UNKNOWN, so the
+  synthetic `LoadBiasAllocator` is never relabelled as PS5 ASLR.
+- `DescribeModuleMetadata`/`ModuleRole`/`InitOrderModel` describe only what
+  evidence supports: dependency names and Sony tag *numbers* are facts, while
+  init/fini ordering, role for a generic ELF, and Sony symbol semantics are
+  UNKNOWN and preserved, not interpreted.
+
+The per-fact ledger is `docs/research/ps5-runtime-phase8.md`. This changes no
+emulator behaviour: it makes the *absence* of PS5 evidence explicit and
+machine-checkable.

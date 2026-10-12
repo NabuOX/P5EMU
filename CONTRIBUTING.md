@@ -91,6 +91,15 @@ Do not fill an unknown with a plausible-looking constant. The existing pattern t
 follow is `docs/research/ps5-subsystems.md` and
 `docs/research/ps5-runtime-evidence.md`, which tag every claim.
 
+**PS5-specific runtime behaviour requires a ledger entry first.** Any change that
+claims PS5 semantics (startup state, stack, argc/argv/auxv, TLS/thread pointer,
+module-init ordering, load bias, symbol/NID layout) must be recorded in
+[`docs/research/ps5-runtime-phase8.md`](docs/research/ps5-runtime-phase8.md) with
+its evidence class and source, before or with the code. The runtime represents
+unevidenced fields as UNKNOWN and **fails explicitly** rather than fabricating
+them. Research-only tasks are listed separately in
+[`ROADMAP.md`](ROADMAP.md).
+
 ## 6. Provenance rules (mandatory)
 
 Do **not** submit any of the following:
