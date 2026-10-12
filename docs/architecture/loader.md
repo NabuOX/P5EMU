@@ -120,3 +120,31 @@ No SELF/encrypted-executable handling, no keys, no firmware, no SDK, no kernel,
 no syscalls, no HLE implementations, no threads, no TLS startup, no GPU/audio.
 Encountering a protected/encrypted container is a documented boundary, not a
 target.
+
+## 10. Typed SCE dynamic metadata (Phase 9)
+
+Phase 9 adds a typed boundary (`loader::SceMetadata`) over the Phase-4 dynamic
+table. It separates two questions that were previously implicit:
+
+- **Is the tag NUMBER recognized?** and **are its SEMANTICS understood?**
+
+`LookupSceTag(number)` returns an `SceTagInfo` whose `SceTagKnowledge` is one of
+`kUnrecognized`, `kNumberAndName`, or `kKnownSemantics`. Every Sony `DT_OS_*` tag
+(and the `_1` variant range) is `kNumberAndName` with `SceTagPayload::kUnknown`
+and `semantics_known() == false`: the name is evidenced, the payload is not.
+Only System V generic tags are `kKnownSemantics`.
+
+`BuildSceModuleMetadata(image)` deterministically buckets the dynamic entries
+into `sce_tags` / `generic_tags` / `unrecognized`, preserves every raw value, and
+counts `unknown_semantics_count`. `ValidateSceMetadata` applies one conservative
+P5EMU policy: a recognized tag that repeats with **differing** values is
+`kConflictingMetadata` (a synthetic policy, not a PS5 claim).
+
+`SceNid` provides NID **representation only** (hold + compare an evidenced opaque
+identifier, and convert to `SymbolIdentity::NumericId`). There is deliberately
+**no NID generation algorithm**. `SceLibraryIdentity` preserves module/library
+identity as an opaque `SymbolIdentity`; it is never turned into a guessed name.
+
+Nothing in this layer consumes an unknown-semantics tag as if it were supported,
+and the linker/relocation pipeline is unchanged. See
+[`../research/ps5-dynamic-linking-phase9.md`](../research/ps5-dynamic-linking-phase9.md).

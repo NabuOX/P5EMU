@@ -99,6 +99,25 @@ research task is evidenced):
 - 🟢 **CPU instruction coverage** — decode/semantics breadth (ISA-documented).
 - 🟡 **ARM64 backend improvements** — codegen coverage, multi-region transport.
 
+### Phase 9 tracks (executable / dynamic linking)
+
+Research-only (evidence first — output is classified facts, not code):
+
+- 🟡 **Dynamic-tag research** — extend the per-tag ledger
+  (`docs/research/ps5-dynamic-linking-phase9.md`): payload type, duplicate rules,
+  ordering. No semantics from names alone.
+- 🟡 **NID research** — representation is done (`SceNid`); any move toward a
+  generation algorithm requires explicit legal/licence review and evidence.
+- 🟡 **Module/import/export evidence** — library-id encoding and version
+  semantics are UNKNOWN; document before implementing.
+
+Implementation-ready (evidence established):
+
+- 🟢 **SCE tag classification** — extend `LookupSceTag` with newly evidenced
+  names; keep unknown payloads `kUnknown`.
+- 🟢 **Malformed/property testing** — campaigns over the typed metadata path.
+- 🟢 **Documentation** — keep `preserved` vs `understood` vs `UNKNOWN` distinct.
+
 ---
 
 ## Good first issues (how to start)

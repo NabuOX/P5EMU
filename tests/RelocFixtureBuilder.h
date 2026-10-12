@@ -40,6 +40,10 @@ struct RelocFixtureOptions {
   std::vector<RelocSym> symbols;   // user symbols start at dynsym index 1
   std::vector<RelocEntry> rela_dyn;
   std::vector<RelocEntry> rela_plt;
+  // Extra raw dynamic entries written before DT_NULL. Used by Phase 9 tests to
+  // model recognized SCE/Sony tags and unknown entries without inventing
+  // structures. The value is preserved verbatim.
+  std::vector<std::pair<std::int64_t, std::uint64_t>> extra_dynamic;
 
   std::uint64_t text_vaddr = 0x400000;
   std::uint64_t data_vaddr = 0x401000;
@@ -133,8 +137,8 @@ inline RelocFixture BuildRelocElf64(const RelocFixtureOptions& o) {
   const std::uint64_t off_plt = off_rela + rela.size();
   const std::uint64_t off_dyn = Align8(off_plt + plt.size());
   // Dynamic entries: STRTAB, STRSZ, SYMTAB, SYMENT, RELA, RELASZ, RELAENT,
-  // JMPREL, PLTRELSZ, PLTREL, NULL.
-  const std::uint64_t dyn_entries = 11;
+  // JMPREL, PLTRELSZ, PLTREL, NULL. Plus caller-supplied extra entries.
+  const std::uint64_t dyn_entries = 11 + o.extra_dynamic.size();
   const std::uint64_t dyn_bytes = dyn_entries * 16;
   const std::uint64_t data_size = off_dyn + dyn_bytes;
 
@@ -170,6 +174,7 @@ inline RelocFixture BuildRelocElf64(const RelocFixtureOptions& o) {
   put_dyn(23, plt_va);          // DT_JMPREL
   put_dyn(2, plt.size());       // DT_PLTRELSZ
   put_dyn(20, 7);               // DT_PLTREL (DT_RELA)
+  for (const auto& kv : o.extra_dynamic) put_dyn(kv.first, kv.second);
   put_dyn(0, 0);                // DT_NULL
 
   fx.data_size = data_size;

@@ -31,6 +31,7 @@ add_library(p5emu_core STATIC
   src/MappedGuestMemory.cpp
   src/loader/Elf64.cpp
   src/loader/Ps5Executable.cpp
+  src/loader/SceMetadata.cpp
   src/loader/Reloc.cpp
   src/loader/Import.cpp
   src/loader/Loader.cpp

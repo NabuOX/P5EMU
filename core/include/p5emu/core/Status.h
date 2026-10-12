@@ -83,6 +83,15 @@ enum class StatusCode : std::uint32_t {
   // The selected runtime profile cannot be materialised with the current
   // evidence (e.g. a PS5 profile that requires an unevidenced TLS/thread model).
   kRuntimeProfileUnsupported,
+
+  // SCE / Sony dynamic metadata (Phase 9).
+  // A tag/identity was recognized by NUMBER, but its semantics are not evidenced
+  // for the requested operation. Recognition is not support.
+  kUnsupportedSceMetadata,
+  // Contradictory metadata (e.g. duplicate singleton tags with different values).
+  kConflictingMetadata,
+  // A module/library scope could not be determined uniquely.
+  kAmbiguousModuleScope,
 };
 
 const char* StatusCodeName(StatusCode code) noexcept;

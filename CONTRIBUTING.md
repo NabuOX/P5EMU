@@ -100,6 +100,14 @@ unevidenced fields as UNKNOWN and **fails explicitly** rather than fabricating
 them. Research-only tasks are listed separately in
 [`ROADMAP.md`](ROADMAP.md).
 
+**Recognising a tag number is not support for its behaviour.** For SCE/Sony
+dynamic metadata, any change that claims understanding of a tag's payload,
+module/library identity encoding, or NID semantics must be recorded in
+[`docs/research/ps5-dynamic-linking-phase9.md`](docs/research/ps5-dynamic-linking-phase9.md)
+with its evidence class and source. Unknown payloads stay `kUnknown`; there is
+no NID generation algorithm in P5EMU and none should be added without legal and
+evidence review.
+
 ## 6. Provenance rules (mandatory)
 
 Do **not** submit any of the following:

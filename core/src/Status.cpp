@@ -102,6 +102,12 @@ const char* StatusCodeName(StatusCode code) noexcept {
       return "unknown-runtime-field";
     case StatusCode::kRuntimeProfileUnsupported:
       return "runtime-profile-unsupported";
+    case StatusCode::kUnsupportedSceMetadata:
+      return "unsupported-sce-metadata";
+    case StatusCode::kConflictingMetadata:
+      return "conflicting-metadata";
+    case StatusCode::kAmbiguousModuleScope:
+      return "ambiguous-module-scope";
   }
   return "unknown";
 }

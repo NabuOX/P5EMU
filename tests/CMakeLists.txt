@@ -34,6 +34,7 @@ set(P5EMU_TEST_SOURCES
   runtime_test.cpp
   runtime_fuzz_test.cpp
   runtime_profile_test.cpp
+  sce_metadata_test.cpp
 )
 
 file(GLOB P5EMU_TEST_FILES_ON_DISK CONFIGURE_DEPENDS
@@ -186,6 +187,15 @@ add_test(NAME p5emu.runtimeprofile.e2e COMMAND p5emu_tests RuntimeProfileE2E.)
 add_test(NAME p5emu.runtimeprofile.negative COMMAND p5emu_tests RuntimeProfileNegative.)
 add_test(NAME p5emu.runtimeprofile.property COMMAND p5emu_tests RuntimeProfileProperty.)
 
+# --- Phase 9 suites ---
+add_test(NAME p5emu.sce.tags       COMMAND p5emu_tests SceTagRegistry.)
+add_test(NAME p5emu.sce.metadata   COMMAND p5emu_tests SceMetadataBuild.)
+add_test(NAME p5emu.sce.nid        COMMAND p5emu_tests SceNidRepresentation.)
+add_test(NAME p5emu.sce.library    COMMAND p5emu_tests SceLibraryIdentity.)
+add_test(NAME p5emu.sce.negative   COMMAND p5emu_tests SceMetadataNegative.)
+add_test(NAME p5emu.sce.property   COMMAND p5emu_tests SceMetadataProperty.)
+add_test(NAME p5emu.sce.e2e        COMMAND p5emu_tests SceDynamicLinkingE2E.)
+
 # Suite inventory, for the Phase 1 gate report.
 set(P5EMU_TEST_SUITES
   "p5emu.core;core_test.cpp: Core (logging, status, version)"
@@ -266,4 +276,11 @@ set(P5EMU_TEST_SUITES
   "p5emu.runtimeprofile.e2e;runtime_profile_test.cpp: loader->startup->CPU (interpreter + AArch64)"
   "p5emu.runtimeprofile.negative;runtime_profile_test.cpp: UNKNOWN/evidence boundary proofs"
   "p5emu.runtimeprofile.property;runtime_profile_test.cpp: randomized evidence-boundary campaign"
+  "p5emu.sce.tags;sce_metadata_test.cpp: tag number vs semantics knowledge"
+  "p5emu.sce.metadata;sce_metadata_test.cpp: dynamic table -> typed SCE metadata"
+  "p5emu.sce.nid;sce_metadata_test.cpp: NID representation, not generation"
+  "p5emu.sce.library;sce_metadata_test.cpp: opaque library identity preservation"
+  "p5emu.sce.negative;sce_metadata_test.cpp: SCE evidence-boundary negative proofs"
+  "p5emu.sce.property;sce_metadata_test.cpp: randomized classification campaign (2000 cases)"
+  "p5emu.sce.e2e;sce_metadata_test.cpp: metadata + linker + runtime + CPU (interpreter + AArch64)"
 )
