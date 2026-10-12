@@ -376,3 +376,48 @@ P5EMU_TEST(SceDynamicLinkingE2E, MetadataSurvivesAndLinkerResolves) {
     CHECK_EQ(static_cast<int>(r2.reason), static_cast<int>(res.reason));
   }
 }
+
+// ===========================================================================
+// Phase 10 evidence boundary: DT_OS_MODULE_INFO stays UNKNOWN.
+// These tests fail if a future contributor promotes the tag to known semantics
+// or assigns it a payload without new evidence. See
+// docs/research/ps5-module-info-phase10.md.
+// ===========================================================================
+P5EMU_TEST(SceModuleInfoEvidence, NumberAndNameKnownPayloadUnknown) {
+  const loader::SceTagInfo info = loader::LookupSceTag(loader::kDtOsModuleInfo);
+  CHECK_EQ(static_cast<int>(info.knowledge),
+           static_cast<int>(loader::SceTagKnowledge::kNumberAndName));
+  CHECK(!info.semantics_known());  // Phase 10: semantics NOT established
+  CHECK_EQ(static_cast<int>(info.payload),
+           static_cast<int>(loader::SceTagPayload::kUnknown));
+  CHECK(info.name != nullptr);
+  CHECK_EQ(std::string(info.name), std::string("DT_OS_MODULE_INFO"));
+
+  // The PS5-era "_1" spelling of the same tag (0x61000043, per the admitted
+  // source) is likewise number-and-name only.
+  const loader::SceTagInfo variant = loader::LookupSceTag(0x61000043ull);
+  CHECK_EQ(static_cast<int>(variant.knowledge),
+           static_cast<int>(loader::SceTagKnowledge::kNumberAndName));
+  CHECK(!variant.semantics_known());
+}
+
+P5EMU_TEST(SceModuleInfoEvidence, RawPayloadPreservedNotInterpreted) {
+  test::RelocFixtureOptions o;
+  o.text = {0xC3};
+  o.data.assign(8, 0);
+  o.symbols.push_back(test::RelocSym{"stub", o.text_vaddr, false});
+  o.extra_dynamic = {{loader::kDtOsModuleInfo, 0xDEADBEEFCAFEF00Dull}};
+  const loader::SceModuleMetadata md =
+      loader::BuildSceModuleMetadata(ParsePs5(test::BuildRelocElf64(o).bytes));
+
+  bool found = false;
+  for (const loader::SceDynamicEntry& e : md.sce_tags) {
+    if (e.info.tag == loader::kDtOsModuleInfo) {
+      found = true;
+      CHECK_EQ(e.value, std::uint64_t{0xDEADBEEFCAFEF00Dull});  // raw preserved
+      CHECK(!e.info.semantics_known());                         // not interpreted
+    }
+  }
+  CHECK(found);
+  CHECK(md.has_unknown_semantics());
+}

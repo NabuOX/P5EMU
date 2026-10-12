@@ -128,3 +128,7 @@ Phase 9 does **not** implement PS5 dynamic-linking semantics, NID generation,
 Sony symbol structures, or any GPU behaviour. It provides a typed, evidence-safe
 representation that **preserves** PS5 metadata, **labels** what is understood,
 and **fails explicitly** where semantics are unsupported.
+
+Phase 10 investigated one of these gaps — `DT_OS_MODULE_INFO` — and concluded the
+payload semantics remain UNKNOWN (number and name known, single source, no
+payload structure): see [`ps5-module-info-phase10.md`](ps5-module-info-phase10.md).

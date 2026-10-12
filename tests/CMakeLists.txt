@@ -196,6 +196,9 @@ add_test(NAME p5emu.sce.negative   COMMAND p5emu_tests SceMetadataNegative.)
 add_test(NAME p5emu.sce.property   COMMAND p5emu_tests SceMetadataProperty.)
 add_test(NAME p5emu.sce.e2e        COMMAND p5emu_tests SceDynamicLinkingE2E.)
 
+# --- Phase 10 suites ---
+add_test(NAME p5emu.sce.moduleinfo COMMAND p5emu_tests SceModuleInfoEvidence.)
+
 # Suite inventory, for the Phase 1 gate report.
 set(P5EMU_TEST_SUITES
   "p5emu.core;core_test.cpp: Core (logging, status, version)"
@@ -283,4 +286,5 @@ set(P5EMU_TEST_SUITES
   "p5emu.sce.negative;sce_metadata_test.cpp: SCE evidence-boundary negative proofs"
   "p5emu.sce.property;sce_metadata_test.cpp: randomized classification campaign (2000 cases)"
   "p5emu.sce.e2e;sce_metadata_test.cpp: metadata + linker + runtime + CPU (interpreter + AArch64)"
+  "p5emu.sce.moduleinfo;sce_metadata_test.cpp: DT_OS_MODULE_INFO evidence boundary (Phase 10)"
 )

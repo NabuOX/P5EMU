@@ -118,6 +118,15 @@ Implementation-ready (evidence established):
 - 🟢 **Malformed/property testing** — campaigns over the typed metadata path.
 - 🟢 **Documentation** — keep `preserved` vs `understood` vs `UNKNOWN` distinct.
 
+### Phase 10 open gap (research-only)
+
+- 🟡 **`DT_OS_MODULE_INFO` payload evidence** — the tag's number and name are
+  known (single source) but its payload semantics remain UNKNOWN. A contributor
+  can close this by finding an **independent, PS5-specific** public source that
+  defines the payload. See
+  [`docs/research/ps5-module-info-phase10.md`](docs/research/ps5-module-info-phase10.md).
+  Research-only — do not implement until the evidence threshold is met.
+
 ---
 
 ## Good first issues (how to start)
